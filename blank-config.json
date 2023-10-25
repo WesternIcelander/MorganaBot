@@ -1,0 +1,12 @@
+{
+  "apiEndpoint": "https://morgana.yourdomain.com",
+  "apiPort": 8080,
+  "discord": {
+    "token": "Discord-bot-token-goes-here"
+  },
+  "twitch": {
+    "clientId": "twitch-client-ID-goes-here",
+    "clientSecret": "twitch-client-secret-goes-here",
+    "notificationSecret": "some-random-string-between-10-and-100-characters"
+  }
+}
