@@ -112,6 +112,7 @@ public class TwitchStreamerWatcher {
     private final Map<String, Long> recentNotifications = new HashMap<>();
 
     private void handleNotification(HTTPRequest request) throws Exception {
+        long now = System.currentTimeMillis();
         String messageType = request.getHeader("Twitch-Eventsub-Message-Type");
         if (messageType == null) return;
         byte[] requestData = Util.readFully(request.inStream);
@@ -150,7 +151,6 @@ public class TwitchStreamerWatcher {
             return;
         }
         synchronized (recentNotifications) {
-            long now = System.currentTimeMillis();
             recentNotifications.entrySet().removeIf((e) -> {
                 Long time = e.getValue();
                 return time == null || now - time > 1200000L;
@@ -185,7 +185,22 @@ public class TwitchStreamerWatcher {
                 ServerInfo serverInfo = bot.getServerInfo(guild.getIdLong());
                 for (ServerInfo.Streamer streamer : serverInfo.streamers) {
                     if (streamerId.equals(streamer.twitchId)) {
-                        handleLiveNotification(jda, guild, serverInfo, streamer, streamerId, streamerName, channelInfo, goingOnline);
+                        boolean postMessage = true;
+                        if (goingOnline) {
+                            if (streamer.startedStreaming == 0L) {
+                                if (now - streamer.stoppedStreaming < serverInfo.streamNotificationCooldown) {
+                                    postMessage = false;
+                                }
+                            }
+                            streamer.startedStreaming = now;
+                        } else {
+                            if (streamer.startedStreaming != 0L) {
+                                streamer.startedStreaming = 0L;
+                                streamer.stoppedStreaming = now;
+                            }
+                        }
+                        serverInfo.save();
+                        handleLiveNotification(jda, guild, serverInfo, streamer, streamerId, streamerName, channelInfo, goingOnline, postMessage);
                     }
                 }
             }
@@ -194,7 +209,7 @@ public class TwitchStreamerWatcher {
         }
     }
 
-    private void handleLiveNotification(JDA jda, Guild guild, ServerInfo serverInfo, ServerInfo.Streamer streamer, String streamerId, String streamerName, JsonObject channelInfo, boolean goingOnline) {
+    private void handleLiveNotification(JDA jda, Guild guild, ServerInfo serverInfo, ServerInfo.Streamer streamer, String streamerId, String streamerName, JsonObject channelInfo, boolean goingOnline, boolean postMessage) {
         Role liveRole = serverInfo.roleForLiveUsers == 0L ? null : guild.getRoleById(serverInfo.roleForLiveUsers);
         if (goingOnline) {
             if (serverInfo.roleForLiveUsers != 0L) {
@@ -202,7 +217,7 @@ public class TwitchStreamerWatcher {
                     guild.addRoleToMember(UserSnowflake.fromId(streamer.discordId), liveRole).queue();
                 }
             }
-            if (serverInfo.channelToPostLiveNotifications != 0L) {
+            if (postMessage && serverInfo.channelToPostLiveNotifications != 0L) {
                 GuildChannel channelToPostIn = guild.getGuildChannelById(serverInfo.channelToPostLiveNotifications);
                 if (channelToPostIn instanceof TextChannel) {
                     TextChannel textChannel = (TextChannel) channelToPostIn;

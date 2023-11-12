@@ -10,6 +10,7 @@ public class ServerInfo extends Data {
     public long roleForLiveUsers;
     public final List<Streamer> streamers = new ArrayList<>();
     public String liveNotificationTemplate;
+    public long streamNotificationCooldown = 1000L * 60L * 30L;
 
     public static class Streamer {
         public Streamer() {
@@ -21,5 +22,7 @@ public class ServerInfo extends Data {
         public long discordId;
         public String twitchId;
         public String liveNotificationTemplate;
+        public long startedStreaming;
+        public long stoppedStreaming;
     }
 }
