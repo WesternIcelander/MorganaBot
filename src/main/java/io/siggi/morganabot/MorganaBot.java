@@ -99,10 +99,16 @@ public class MorganaBot {
                 Commands.slash("addstreamer", "Add a streamer")
                         .addOption(OptionType.STRING, "twitch-name", "What's their name on Twitch?", true)
                         .addOption(OptionType.USER, "discord-name", "What's their name on Discord?", false)
+                        .addOption(OptionType.CHANNEL, "post-in-channel", "Should we post in a channel other than the default? Leave blank for default", false)
                         .setDefaultPermissions(DefaultMemberPermissions.DISABLED),
                 Commands.slash("deletestreamer", "Delete a streamer")
                         .addOption(OptionType.STRING, "twitch-name", "What's their name on Twitch?", false)
                         .addOption(OptionType.USER, "discord-name", "What's their name on Discord?", false)
+                        .setDefaultPermissions(DefaultMemberPermissions.DISABLED),
+                Commands.slash("setchanneloverride", "Set a channel override for a streamer")
+                        .addOption(OptionType.STRING, "twitch-name", "What's their name on Twitch?", false)
+                        .addOption(OptionType.USER, "discord-name", "What's their name on Discord?", false)
+                        .addOption(OptionType.STRING, "channel", "What channel should we post in? Leave blank to remove the override", false)
                         .setDefaultPermissions(DefaultMemberPermissions.DISABLED),
                 Commands.slash("streamerlist", "Get a list of streamers in this Discord!")
         ).queue();

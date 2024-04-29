@@ -19,6 +19,7 @@ public class ServerInfo extends Data {
             this.discordId = discordId;
             this.twitchId = twitchId;
         }
+        public long channelToPostLiveNotifications;
         public long discordId;
         public String twitchId;
         public String liveNotificationTemplate;

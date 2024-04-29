@@ -217,8 +217,12 @@ public class TwitchStreamerWatcher {
                     guild.addRoleToMember(UserSnowflake.fromId(streamer.discordId), liveRole).queue();
                 }
             }
-            if (postMessage && serverInfo.channelToPostLiveNotifications != 0L) {
-                GuildChannel channelToPostIn = guild.getGuildChannelById(serverInfo.channelToPostLiveNotifications);
+            long channelIdToPostIn = serverInfo.channelToPostLiveNotifications;
+            if (streamer.channelToPostLiveNotifications != 0L) {
+                channelIdToPostIn = streamer.channelToPostLiveNotifications;
+            }
+            if (postMessage && channelIdToPostIn != 0L) {
+                GuildChannel channelToPostIn = guild.getGuildChannelById(channelIdToPostIn);
                 if (channelToPostIn instanceof TextChannel) {
                     TextChannel textChannel = (TextChannel) channelToPostIn;
                     String liveMessage = streamer.liveNotificationTemplate;

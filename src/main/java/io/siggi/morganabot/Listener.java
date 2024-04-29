@@ -47,6 +47,10 @@ public class Listener extends ListenerAdapter {
                     TwitchCommandHandler.setLiveChannel(bot, event);
                 }
                 break;
+                case "setchanneloverride": {
+                    TwitchCommandHandler.setChannelOverride(bot, event);
+                }
+                break;
             }
         } catch (Exception e) {
             e.printStackTrace();
