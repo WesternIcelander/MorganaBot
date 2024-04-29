@@ -98,7 +98,7 @@ public class MorganaBot {
                         .setDefaultPermissions(DefaultMemberPermissions.DISABLED),
                 Commands.slash("addstreamer", "Add a streamer")
                         .addOption(OptionType.STRING, "twitch-name", "What's their name on Twitch?", true)
-                        .addOption(OptionType.USER, "discord-name", "What's their name on Discord?", true)
+                        .addOption(OptionType.USER, "discord-name", "What's their name on Discord?", false)
                         .setDefaultPermissions(DefaultMemberPermissions.DISABLED),
                 Commands.slash("deletestreamer", "Delete a streamer")
                         .addOption(OptionType.STRING, "twitch-name", "What's their name on Twitch?", false)

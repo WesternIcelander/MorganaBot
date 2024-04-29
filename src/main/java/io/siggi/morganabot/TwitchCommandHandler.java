@@ -26,11 +26,11 @@ public class TwitchCommandHandler {
             String twitchName = twitchMapping == null ? null : twitchMapping.getAsString();
             OptionMapping discordMapping = event.getInteraction().getOption("discord-name");
             User discordUser = discordMapping == null ? null : discordMapping.getAsUser();
-            if (twitchName == null || discordUser == null) {
+            if (twitchName == null) {
                 event.reply("Whoops!").setEphemeral(true).queue();
                 return;
             }
-            long discordUserId = discordUser.getIdLong();
+            long discordUserId = discordUser == null ? 0L : discordUser.getIdLong();
             JsonObject streamerInfoByUsername = bot.getTwitchStreamerWatcher().getStreamerInfoByUsername(twitchName);
             String streamerUsername = streamerInfoByUsername.get("display_name").getAsString();
             String streamerId = streamerInfoByUsername.get("id").getAsString();
@@ -38,7 +38,7 @@ public class TwitchCommandHandler {
                 if (streamerId.equals(streamer.twitchId)) {
                     event.reply("The specified Twitch user is already added as a streamer!").setEphemeral(true).queue();
                     return;
-                } else if (discordUserId == streamer.discordId) {
+                } else if (discordUserId != 0L && discordUserId == streamer.discordId) {
                     event.reply("The specified Discord user is already added as a streamer!").setEphemeral(true).queue();
                     return;
                 }
@@ -153,13 +153,15 @@ public class TwitchCommandHandler {
                         break;
                     }
                 }
-                sb.append("\n[");
-                sb.append(streamerName);
-                sb.append("](");
-                sb.append("https://www.twitch.tv/").append(streamerName);
-                sb.append(") / ");
+                sb.append("\n");
+                sb.append(Util.markdownEscape(streamerName));
+                sb.append(" / ");
                 if (streamer != null) {
-                    sb.append("<@").append(streamer.discordId).append(">");
+                    if (streamer.discordId == 0L) {
+                        sb.append("Discord user not set");
+                    } else {
+                        sb.append("<@").append(streamer.discordId).append(">");
+                    }
                 } else {
                     sb.append("?");
                 }

@@ -227,7 +227,7 @@ public class TwitchStreamerWatcher {
                     String gameName = Util.markdownEscape(channelInfo.get("game_name").getAsString());
                     String streamName = Util.markdownEscape(channelInfo.get("title").getAsString());
                     String streamerNameEscaped = Util.markdownEscape(streamerName);
-                    String discordMention = "<@" + streamer.discordId + ">";
+                    String discordMention = streamer.discordId == 0L ? "?" : ("<@" + streamer.discordId + ">");
                     liveMessage = liveMessage
                             .replace("${game_name}", gameName)
                             .replace("${stream_name}", streamName)
