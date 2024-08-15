@@ -197,9 +197,11 @@ public class TwitchCommandHandler {
                         break;
                     }
                 }
-                sb.append("\n");
-                sb.append(Util.markdownEscape(streamerName));
-                sb.append(" / ");
+                sb.append("\n[");
+                sb.append(streamerName);
+                sb.append("](");
+                sb.append("<https://www.twitch.tv/").append(streamerName);
+                sb.append(">) / ");
                 if (streamer != null) {
                     if (streamer.discordId == 0L) {
                         sb.append("Discord user not set");
