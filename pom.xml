@@ -35,7 +35,7 @@
         <dependency>
             <groupId>io.siggi</groupId>
             <artifactId>SiggiHTTP</artifactId>
-            <version>1.8-SNAPSHOT</version>
+            <version>1.10</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
