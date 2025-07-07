@@ -153,7 +153,7 @@ public class TimeHandler {
         if (date.isEmpty()) {
             if (calendar.getTimeInMillis() < now) {
                 // if the time is in the past, make it tomorrow XD
-                calendar.setTimeInMillis(calendar.getTimeInMillis() + 86400000L);
+                calendar.add(Calendar.DAY_OF_MONTH, 1);
             }
         } else if (!dateMatcher.matches()) {
             event.reply("I don't understand the date you entered! Please use year/month/day format.").setEphemeral(true).queue();
