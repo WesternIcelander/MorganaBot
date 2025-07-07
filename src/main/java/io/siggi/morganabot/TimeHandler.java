@@ -156,7 +156,7 @@ public class TimeHandler {
                 calendar.setTimeInMillis(calendar.getTimeInMillis() + 86400000L);
             }
         } else if (!dateMatcher.matches()) {
-            event.reply("I don't understand the date you entered! Please use year/month/day format.").queue();
+            event.reply("I don't understand the date you entered! Please use year/month/day format.").setEphemeral(true).queue();
             return;
         } else {
             String yearString = dateMatcher.group(1);
