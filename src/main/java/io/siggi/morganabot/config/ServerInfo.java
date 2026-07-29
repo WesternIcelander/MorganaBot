@@ -7,6 +7,7 @@ public class ServerInfo extends Data {
 
     public boolean enabledTwitchTracking = false;
     public long channelToPostLiveNotifications;
+    public boolean deleteNotificationsOnOffline;
     public long roleForLiveUsers;
     public final List<Streamer> streamers = new ArrayList<>();
     public String liveNotificationTemplate;
@@ -20,6 +21,7 @@ public class ServerInfo extends Data {
             this.twitchId = twitchId;
         }
         public long channelToPostLiveNotifications;
+        public long lastLiveNotificationId;
         public long discordId;
         public String twitchId;
         public String liveNotificationTemplate;

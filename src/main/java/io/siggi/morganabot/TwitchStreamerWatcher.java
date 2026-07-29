@@ -13,6 +13,7 @@ import io.siggi.morganabot.util.Util;
 import io.siggi.http.HTTPRequest;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.entities.Guild;
+import net.dv8tion.jda.api.entities.Message;
 import net.dv8tion.jda.api.entities.Role;
 import net.dv8tion.jda.api.entities.UserSnowflake;
 import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
@@ -33,6 +34,7 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 
 import static io.siggi.morganabot.util.Util.urlEncode;
 
@@ -211,20 +213,28 @@ public class TwitchStreamerWatcher {
 
     private void handleLiveNotification(JDA jda, Guild guild, ServerInfo serverInfo, ServerInfo.Streamer streamer, String streamerId, String streamerName, JsonObject channelInfo, boolean goingOnline, boolean postMessage) {
         Role liveRole = serverInfo.roleForLiveUsers == 0L ? null : guild.getRoleById(serverInfo.roleForLiveUsers);
+        long channelIdToPostIn = serverInfo.channelToPostLiveNotifications;
+        if (streamer.channelToPostLiveNotifications != 0L) {
+            channelIdToPostIn = streamer.channelToPostLiveNotifications;
+        }
+        TextChannel textChannel;
+        if (channelIdToPostIn == 0L) {
+            textChannel = null;
+        } else {
+            GuildChannel channelToPostIn = guild.getGuildChannelById(channelIdToPostIn);
+            if (channelToPostIn instanceof TextChannel) {
+                textChannel = (TextChannel) channelToPostIn;
+            } else {
+                textChannel = null;
+            }
+        }
         if (goingOnline) {
             if (serverInfo.roleForLiveUsers != 0L) {
                 if (liveRole != null) {
                     guild.addRoleToMember(UserSnowflake.fromId(streamer.discordId), liveRole).queue();
                 }
             }
-            long channelIdToPostIn = serverInfo.channelToPostLiveNotifications;
-            if (streamer.channelToPostLiveNotifications != 0L) {
-                channelIdToPostIn = streamer.channelToPostLiveNotifications;
-            }
-            if (postMessage && channelIdToPostIn != 0L) {
-                GuildChannel channelToPostIn = guild.getGuildChannelById(channelIdToPostIn);
-                if (channelToPostIn instanceof TextChannel) {
-                    TextChannel textChannel = (TextChannel) channelToPostIn;
+            if (postMessage && textChannel != null) {
                     String liveMessage = streamer.liveNotificationTemplate;
                     if (liveMessage == null) liveMessage = serverInfo.liveNotificationTemplate;
                     if (liveMessage == null) liveMessage = "${streamer_name} has gone live on Twitch, playing ${game_name}! Check 'em out!\n${twitch_link}";
@@ -238,14 +248,20 @@ public class TwitchStreamerWatcher {
                             .replace("${streamer_name}", streamerNameEscaped)
                             .replace("${twitch_link}", "https://www.twitch.tv/" + streamerName)
                             .replace("${discord_name}", discordMention);
-                    textChannel.sendMessage(liveMessage).queue();
-                }
+                    CompletableFuture<Message> submit = textChannel.sendMessage(liveMessage).submit(true);
+                    submit.thenAccept((message) -> {
+                        streamer.lastLiveNotificationId = message.getIdLong();
+                        serverInfo.save();
+                    });
             }
         } else {
             if (serverInfo.roleForLiveUsers != 0L) {
                 if (liveRole != null) {
                     guild.removeRoleFromMember(UserSnowflake.fromId(streamer.discordId), liveRole).queue();
                 }
+            }
+            if (serverInfo.deleteNotificationsOnOffline && textChannel != null && streamer.lastLiveNotificationId != 0L) {
+                textChannel.deleteMessageById(streamer.lastLiveNotificationId).queue();
             }
         }
     }
