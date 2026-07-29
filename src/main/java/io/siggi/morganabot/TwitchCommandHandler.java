@@ -183,6 +183,55 @@ public class TwitchCommandHandler {
         }
     }
 
+    static void setLiveMessage(MorganaBot bot, SlashCommandInteractionEvent event) {
+        try {
+            ServerInfo serverInfo = bot.getServerInfo(event.getGuild().getIdLong());
+            if (!serverInfo.enabledTwitchTracking) {
+                event.reply("This feature is not enabled for this Discord server. Contact <@260595748465278976> if you believe this is a mistake.").setEphemeral(true).queue();
+                return;
+            }
+            OptionMapping messageMapping = event.getInteraction().getOption("message");
+            String message = messageMapping == null ? null : messageMapping.getAsString();
+            OptionMapping discordNameMapping = event.getInteraction().getOption("discord-name");
+            User discordUser = discordNameMapping == null ? null : discordNameMapping.getAsUser();
+            if (message != null) {
+                message = message.replace("\\n", "\n");
+                if (message.equals("default") || message.equals("reset")) {
+                    message = null;
+                } else if (message.equals("help")) {
+                    event.reply("Available variables: ${game_name}, ${stream_name}, ${streamer_name}, ${twitch_link}, ${discord_name}\n\nTo insert line breaks in a message, use \\n").setEphemeral(true).queue();
+                    return;
+                }
+            }
+            ServerInfo.Streamer streamer = null;
+            if (discordUser != null) {
+                for (ServerInfo.Streamer s : serverInfo.streamers) {
+                    if (s.discordId == discordUser.getIdLong()) {
+                        streamer = s;
+                        break;
+                    }
+                }
+                if (streamer == null) {
+                    event.reply("Specified user is not added as a streamer.").setEphemeral(true).queue();
+                    return;
+                }
+            }
+            String updatedMessage;
+            if (streamer != null) {
+                streamer.liveNotificationTemplate = message;
+                updatedMessage = "Updated user-specific notification template for <@" + discordUser.getIdLong() + ">!";
+            } else {
+                serverInfo.liveNotificationTemplate = message;
+                updatedMessage = "Updated server-wide notification template!";
+            }
+            serverInfo.save();
+            event.reply(updatedMessage).setEphemeral(true).queue();
+        } catch (Exception e) {
+            e.printStackTrace();
+            event.reply("There was a problem executing that command, try again!").setEphemeral(true).queue();
+        }
+    }
+
     static void getStreamerList(MorganaBot bot, SlashCommandInteractionEvent event) {
         try {
             ServerInfo serverInfo = bot.getServerInfo(event.getGuild().getIdLong());
