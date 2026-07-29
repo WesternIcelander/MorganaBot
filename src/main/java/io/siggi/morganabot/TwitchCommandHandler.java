@@ -166,6 +166,23 @@ public class TwitchCommandHandler {
         }
     }
 
+    static void setDeleteOnOffline(MorganaBot bot, SlashCommandInteractionEvent event) {
+        try {
+            ServerInfo serverInfo = bot.getServerInfo(event.getGuild().getIdLong());
+            if (!serverInfo.enabledTwitchTracking) {
+                event.reply("This feature is not enabled for this Discord server. Contact <@260595748465278976> if you believe this is a mistake.").setEphemeral(true).queue();
+                return;
+            }
+            OptionMapping deleteMapping = event.getInteraction().getOption("delete");
+            serverInfo.deleteNotificationsOnOffline = deleteMapping.getAsBoolean();
+            serverInfo.save();
+            event.reply("Set delete notifications on offline: " + serverInfo.deleteNotificationsOnOffline).setEphemeral(true).queue();
+        } catch (Exception e) {
+            e.printStackTrace();
+            event.reply("There was a problem executing that command, try again!").setEphemeral(true).queue();
+        }
+    }
+
     static void getStreamerList(MorganaBot bot, SlashCommandInteractionEvent event) {
         try {
             ServerInfo serverInfo = bot.getServerInfo(event.getGuild().getIdLong());

@@ -105,6 +105,9 @@ public class MorganaBot {
                         .addOption(OptionType.STRING, "twitch-name", "What's their name on Twitch?", false)
                         .addOption(OptionType.USER, "discord-name", "What's their name on Discord?", false)
                         .setDefaultPermissions(DefaultMemberPermissions.DISABLED),
+                Commands.slash("setdeleteonoffline", "Set whether or not to delete notifications when a streamer goes offline")
+                        .addOption(OptionType.BOOLEAN, "delete", "Should we delete notifications when a streamer goes offline?", true)
+                        .setDefaultPermissions(DefaultMemberPermissions.DISABLED),
                 Commands.slash("setchanneloverride", "Set a channel override for a streamer")
                         .addOption(OptionType.STRING, "twitch-name", "What's their name on Twitch?", false)
                         .addOption(OptionType.USER, "discord-name", "What's their name on Discord?", false)

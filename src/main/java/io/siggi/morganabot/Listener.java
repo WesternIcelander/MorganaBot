@@ -47,6 +47,10 @@ public class Listener extends ListenerAdapter {
                     TwitchCommandHandler.setLiveChannel(bot, event);
                 }
                 break;
+                case "setdeleteonoffline": {
+                    TwitchCommandHandler.setDeleteOnOffline(bot, event);
+                }
+                break;
                 case "setchanneloverride": {
                     TwitchCommandHandler.setChannelOverride(bot, event);
                 }

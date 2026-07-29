@@ -234,6 +234,11 @@ public class TwitchStreamerWatcher {
                     guild.addRoleToMember(UserSnowflake.fromId(streamer.discordId), liveRole).queue();
                 }
             }
+            boolean silent = false;
+            if (!postMessage && serverInfo.deleteNotificationsOnOffline) {
+                silent = true;
+                postMessage = true;
+            }
             if (postMessage && textChannel != null) {
                     String liveMessage = streamer.liveNotificationTemplate;
                     if (liveMessage == null) liveMessage = serverInfo.liveNotificationTemplate;
@@ -248,8 +253,7 @@ public class TwitchStreamerWatcher {
                             .replace("${streamer_name}", streamerNameEscaped)
                             .replace("${twitch_link}", "https://www.twitch.tv/" + streamerName)
                             .replace("${discord_name}", discordMention);
-                    CompletableFuture<Message> submit = textChannel.sendMessage(liveMessage).submit(true);
-                    submit.thenAccept((message) -> {
+                    textChannel.sendMessage(liveMessage).setSuppressedNotifications(silent).submit(true).thenAccept((message) -> {
                         streamer.lastLiveNotificationId = message.getIdLong();
                         serverInfo.save();
                     });
