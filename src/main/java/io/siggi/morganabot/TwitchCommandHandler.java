@@ -252,7 +252,7 @@ public class TwitchCommandHandler {
                 streamersByName.put(streamerName, entry.getValue());
             }
             StringBuilder sb = new StringBuilder();
-            sb.append("Streamers in this server:\n");
+            sb.append("Streamers in this server:\n\n");
             for (String streamerName : alphabeticalStreamers) {
                 JsonObject jsonObject = streamersByName.get(streamerName);
                 String twitchId = jsonObject.get("id").getAsString();
@@ -263,26 +263,27 @@ public class TwitchCommandHandler {
                         break;
                     }
                 }
-                sb.append("\n[");
+                sb.append("- [");
                 sb.append(streamerName);
                 sb.append("](");
                 sb.append("<https://www.twitch.tv/").append(streamerName);
-                sb.append(">) / ");
+                sb.append(">)\n");
                 if (streamer != null) {
                     if (streamer.discordId == 0L) {
-                        sb.append("Discord user not set");
+                        sb.append("  - Discord: unset\n");
                     } else {
-                        sb.append("<@").append(streamer.discordId).append(">");
+                        sb.append("  - Discord: <@").append(streamer.discordId).append(">\n");
+                    }
+                    if (streamer.stoppedStreaming > 0L) {
+                        sb.append("  - Last stream: <t:").append(streamer.stoppedStreaming / 1000L).append(":f>\n");
                     }
                     if (streamer.channelToPostLiveNotifications != 0L) {
-                        sb.append(", override: <#").append(streamer.channelToPostLiveNotifications).append(">");
+                        sb.append("  - Posts in: <#").append(streamer.channelToPostLiveNotifications).append(">\n");
                     }
-                } else {
-                    sb.append("?");
                 }
             }
             if (ids.isEmpty()) {
-                sb.append("\nNobody is here! Add someone using `/addstreamer`!");
+                sb.append("Nobody is here! Add someone using `/addstreamer`!");
             }
             String message = sb.toString();
             event.reply(message).setEphemeral(true).queue();
