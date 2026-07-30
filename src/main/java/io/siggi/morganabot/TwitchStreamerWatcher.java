@@ -239,6 +239,9 @@ public class TwitchStreamerWatcher {
                 silent = true;
                 postMessage = true;
             }
+            if (serverInfo.deleteNotificationsOnOffline && streamer.lastLiveNotificationId != 0L && textChannel != null) {
+                textChannel.deleteMessageById(streamer.lastLiveNotificationId).queue();
+            }
             if (postMessage && textChannel != null) {
                     String liveMessage = streamer.liveNotificationTemplate;
                     if (liveMessage == null) liveMessage = serverInfo.liveNotificationTemplate;
