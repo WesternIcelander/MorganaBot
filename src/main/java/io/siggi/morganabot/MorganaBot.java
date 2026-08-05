@@ -11,6 +11,8 @@ import io.siggi.processapi.ProcessAPI;
 import io.siggi.processapi.Signal;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.JDABuilder;
+import net.dv8tion.jda.api.interactions.InteractionContextType;
+import net.dv8tion.jda.api.interactions.IntegrationType;
 import net.dv8tion.jda.api.interactions.commands.DefaultMemberPermissions;
 import net.dv8tion.jda.api.interactions.commands.OptionType;
 import net.dv8tion.jda.api.interactions.commands.build.Commands;
@@ -82,10 +84,14 @@ public class MorganaBot {
         jda.awaitReady();
         jda.updateCommands().addCommands(
                 Commands.slash("timezone", "Set your time zone used by the /time command!")
-                        .addOption(OptionType.STRING, "timezone", "What's your timezone? Format is Continent/City, select your nearest city!", true, true),
+                        .addOption(OptionType.STRING, "timezone", "What's your timezone? Format is Continent/City, select your nearest city!", true, true)
+                        .setIntegrationTypes(IntegrationType.GUILD_INSTALL, IntegrationType.USER_INSTALL)
+                        .setContexts(InteractionContextType.GUILD, InteractionContextType.PRIVATE_CHANNEL),
                 Commands.slash("time", "Generate a time code that shows time in everyone's local timezone!")
                         .addOption(OptionType.STRING, "time", "What time? (Optional date in year/month/day first, then time)", true)
-                        .addOption(OptionType.STRING, "timezone", "Which timezone?", false, true),
+                        .addOption(OptionType.STRING, "timezone", "Which timezone?", false, true)
+                        .setIntegrationTypes(IntegrationType.GUILD_INSTALL, IntegrationType.USER_INSTALL)
+                        .setContexts(InteractionContextType.GUILD, InteractionContextType.PRIVATE_CHANNEL),
                 Commands.slash("letmein", "Add yourself to the whitelist on our Minecraft server!")
                         .addOption(OptionType.STRING, "username", "What's your username on Minecraft?", true)
                         .addOption(OptionType.BOOLEAN, "cracked", "If you didn't buy Minecraft, set this to True", false)

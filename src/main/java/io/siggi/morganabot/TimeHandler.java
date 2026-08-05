@@ -92,7 +92,7 @@ public class TimeHandler {
             event.reply("The timezone you entered was not recognized!").setEphemeral(true).queue();
             return;
         }
-        long idLong = event.getMember().getUser().getIdLong();
+        long idLong = event.getUser().getIdLong();
         UserData userData = bot.getUserData(idLong);
         userData.timezone = caseCorrectedTimezone;
         userData.save();
@@ -105,7 +105,7 @@ public class TimeHandler {
         String time = timeMapping == null ? "" : timeMapping.getAsString();
         OptionMapping timeZoneMapping = event.getInteraction().getOption("timezone");
         String timezoneString = timeZoneMapping == null ? "" : timeZoneMapping.getAsString();
-        long idLong = event.getMember().getUser().getIdLong();
+        long idLong = event.getUser().getIdLong();
         boolean timezoneNotSet = false;
         if (!timezoneString.isEmpty()) {
             timezoneString = timezoneMap.get(timezoneString.toLowerCase(Locale.ROOT));
