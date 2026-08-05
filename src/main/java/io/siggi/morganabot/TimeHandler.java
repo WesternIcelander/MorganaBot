@@ -183,13 +183,15 @@ public class TimeHandler {
             }
             if (month != -1) {
                 calendar.set(Calendar.MONTH, month);
+                calendar.set(Calendar.DAY_OF_MONTH, day);
                 if (year == -1) {
                     if (calendar.getTimeInMillis() < now) {
                         calendar.add(Calendar.YEAR, 1);
                     }
                 }
+            } else {
+                calendar.set(Calendar.DAY_OF_MONTH, day);
             }
-            calendar.set(Calendar.DAY_OF_MONTH, day);
             if (month == -1) {
                 if (calendar.getTimeInMillis() < now) {
                     calendar.add(Calendar.MONTH, 1);
