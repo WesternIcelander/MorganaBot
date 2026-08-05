@@ -84,8 +84,8 @@ public class MorganaBot {
                 Commands.slash("timezone", "Set your time zone used by the /time command!")
                         .addOption(OptionType.STRING, "timezone", "What's your timezone? Format is Continent/City, select your nearest city!", true, true),
                 Commands.slash("time", "Generate a time code that shows time in everyone's local timezone!")
-                        .addOption(OptionType.STRING, "time", "What time?", true)
-                        .addOption(OptionType.STRING, "date", "What date? Year/Month/Day. If you omit year/month, the closest matching future date will be used.", false),
+                        .addOption(OptionType.STRING, "time", "What time? (Optional date in year/month/day first, then time)", true)
+                        .addOption(OptionType.STRING, "timezone", "Which timezone?", false, true),
                 Commands.slash("letmein", "Add yourself to the whitelist on our Minecraft server!")
                         .addOption(OptionType.STRING, "username", "What's your username on Minecraft?", true)
                         .addOption(OptionType.BOOLEAN, "cracked", "If you didn't buy Minecraft, set this to True", false)

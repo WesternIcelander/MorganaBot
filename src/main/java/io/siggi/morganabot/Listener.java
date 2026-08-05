@@ -69,7 +69,7 @@ public class Listener extends ListenerAdapter {
     @Override
     public void onCommandAutoCompleteInteraction(CommandAutoCompleteInteractionEvent event) {
         String name = event.getName();
-        if (name.equals("timezone")) {
+        if (name.equals("time") || name.equals("timezone")) {
             TimeHandler.autocompleteTimezone(event);
         }
     }

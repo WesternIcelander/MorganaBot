@@ -23,6 +23,14 @@ public class TimeHandler {
         try (BufferedReader reader = new BufferedReader(new FileReader(new File(Util.getDataRoot(), "timezones.txt")))) {
             String line;
             while ((line = reader.readLine()) != null) {
+                int equalPos = line.indexOf("=");
+                if (equalPos != -1) {
+                    String key = line.substring(0, equalPos).trim().toLowerCase(Locale.ROOT);
+                    String value = line.substring(equalPos + 1).trim();
+                    timezoneSet.add(value);
+                    timezoneMap.put(key, value);
+                    continue;
+                }
                 timezoneSet.add(line);
                 timezoneMap.put(line.toLowerCase(Locale.ROOT), line);
             }
@@ -30,8 +38,7 @@ public class TimeHandler {
         }
     }
 
-    private static final Pattern timePattern = Pattern.compile("([0-9]{1,2})(?:[:.]([0-9]{1,2})(?:[:.]([0-9]{1,2}))?)? ?(?:([ap])m?)?", Pattern.CASE_INSENSITIVE);
-    private static final Pattern datePattern = Pattern.compile("(?:(?:([0-9]{4})[/\\- ])?([0-9]{1,2}|January|Jan|February|Feb|March|Mar|April|Apr|May|June|Jun|July|Jul|August|Aug|September|Sep|October|Oct|November|Nov|December|Dec)[/\\- ])?([0-9]{1,2}?)(?:st|nd|rd|th)?", Pattern.CASE_INSENSITIVE);
+    private static final Pattern pattern = Pattern.compile("(?:(?:(?:([0-9]{4})[/\\- ])?([0-9]{1,2}|January|Jan|February|Feb|March|Mar|April|Apr|May|June|Jun|July|Jul|August|Aug|September|Sep|October|Oct|November|Nov|December|Dec)[/\\- ])?([0-9]{1,2}?)(?:st|nd|rd|th)? )?([0-9]{1,2})(?:[:.]([0-9]{1,2})(?:[:.]([0-9]{1,2}))?)? ?(?:([ap])m?)?");
 
     private static final Map<String, Integer> parseMonth = new HashMap<>();
 
@@ -96,28 +103,39 @@ public class TimeHandler {
         long now = System.currentTimeMillis();
         OptionMapping timeMapping = event.getInteraction().getOption("time");
         String time = timeMapping == null ? "" : timeMapping.getAsString();
-        OptionMapping dateMapping = event.getInteraction().getOption("date");
-        String date = dateMapping == null ? "" : dateMapping.getAsString();
+        OptionMapping timeZoneMapping = event.getInteraction().getOption("timezone");
+        String timezoneString = timeZoneMapping == null ? "" : timeZoneMapping.getAsString();
         long idLong = event.getMember().getUser().getIdLong();
         boolean timezoneNotSet = false;
-        String timezoneString = bot.getUserData(idLong).timezone;
-        if (timezoneString == null) {
-            timezoneNotSet = true;
-            timezoneString = "UTC";
+        if (!timezoneString.isEmpty()) {
+            timezoneString = timezoneMap.get(timezoneString.toLowerCase(Locale.ROOT));
+            if (timezoneString == null) {
+                event.reply("The timezone you entered was not recognized!").setEphemeral(true).queue();
+                return;
+            }
+        } else {
+            timezoneString = bot.getUserData(idLong).timezone;
+            if (timezoneString == null) {
+                timezoneNotSet = true;
+                timezoneString = "UTC";
+            }
         }
         TimeZone timeZone = TimeZone.getTimeZone(timezoneString);
         GregorianCalendar calendar = new GregorianCalendar();
         calendar.setTimeZone(timeZone);
         boolean clockHas24Hours, afternoon;
-        Matcher timeMatcher = timePattern.matcher(time);
+        Matcher timeMatcher = pattern.matcher(time);
         if (!timeMatcher.matches()) {
             event.reply("I don't understand the time you entered!").setEphemeral(true).queue();
             return;
         }
-        String hourString = timeMatcher.group(1);
-        String minuteString = timeMatcher.group(2);
-        String secondString = timeMatcher.group(3);
-        String ampmString = timeMatcher.group(4);
+        String yearString = timeMatcher.group(1);
+        String monthString = timeMatcher.group(2);
+        String dayString = timeMatcher.group(3);
+        String hourString = timeMatcher.group(4);
+        String minuteString = timeMatcher.group(5);
+        String secondString = timeMatcher.group(6);
+        String ampmString = timeMatcher.group(7);
         if (ampmString == null || ampmString.isEmpty()) {
             clockHas24Hours = true;
             afternoon = false;
@@ -149,19 +167,13 @@ public class TimeHandler {
         calendar.set(Calendar.MINUTE, minute);
         calendar.set(Calendar.SECOND, second);
         calendar.set(Calendar.MILLISECOND, 0);
-        Matcher dateMatcher = datePattern.matcher(date);
-        if (date.isEmpty()) {
+        if (dayString == null || dayString.isEmpty()) {
             if (calendar.getTimeInMillis() < now) {
                 // if the time is in the past, make it tomorrow XD
                 calendar.add(Calendar.DAY_OF_MONTH, 1);
             }
-        } else if (!dateMatcher.matches()) {
-            event.reply("I don't understand the date you entered! Please use year/month/day format.").setEphemeral(true).queue();
-            return;
         } else {
-            String yearString = dateMatcher.group(1);
             int year = yearString == null || yearString.isEmpty() ? -1 : Integer.parseInt(yearString);
-            String monthString = dateMatcher.group(2);
             int month;
             if (monthString == null || monthString.isEmpty()) {
                 month = -1;
@@ -176,7 +188,6 @@ public class TimeHandler {
                     return;
                 }
             }
-            String dayString = dateMatcher.group(3);
             int day = Integer.parseInt(dayString);
             if (year != -1) {
                 calendar.set(Calendar.YEAR, year);
@@ -205,11 +216,9 @@ public class TimeHandler {
         }
         response.append("**Timezone**: ").append(timezoneString).append("\n");
         if (!time.isEmpty()) {
-            response.append("**Time**: ").append(time).append("\n");
+            response.append("**Input**: ").append(time).append("\n");
         }
-        if (!date.isEmpty()) {
-            response.append("**Date**: ").append(date).append("\n");
-        }
+        response.append("**Unix Timestamp**: ").append(timeInSeconds).append("\n");
         response.append("\n");
         response.append("Copy/paste the code for the one you want into your message\n");
         Consumer<String> appender = (type) -> {
