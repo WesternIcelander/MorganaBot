@@ -17,7 +17,7 @@ Discord bot (Java 17, Maven, JDA 6) that posts in Discord channels when Twitch s
 - `TwitchCommandHandler` — streamer admin commands (`/addstreamer`, `/deletestreamer`, `/setlivechannel`, `/setstreamerrole`, `/setdeleteonoffline`, `/setlivemessage`, `/setchanneloverride`, `/streamerlist`).
 - `TimeHandler` — `/time` parsing (regex) and `/timezone`; zones loaded from `data/timezones.txt`.
 - `WebHandler` — raw `ServerSocket` loop feeding SiggiHTTP.
-- `config/` — `Data` base class (Gson read; save via temp file + rename). Per-guild `data/servers/<id>.json` (`ServerInfo`), per-user `data/users/<id>.json` (`UserData`), `config.json`, `auth-cache.json`. Read fresh from disk on each access, no caching/locking.
+- `config/` — `Data` base class (Gson read; save via temp file + rename). Per-guild `data/servers/<id>.json` (`ServerInfo`), per-user `data/users/<id>.json` (`UserData`), `config.json`, `auth-cache.json`. Server files go through `ServerInfoStore` (`bot.getServerInfoStore()`): one cached `ServerInfo` per guild, per-guild lock, `get()` returns a copy, `modify(guildId, fn)` changes and saves; reloads when the file changes on disk. User data, config and auth cache are still read fresh with no locking.
 - `util/` — `EndpointCaller` (HttpURLConnection wrapper), `MapBuilder`, `Util`.
 
 MorganaBot is a **private** bot: it's in fewer than 100 servers, and that's not expected to change. It has all privileged gateway intents. Anyone else who wants it can build and run their own copy.
