@@ -58,7 +58,12 @@ Admins choose which non-admin streamers can write their own live message, and wh
   So they can always edit around a mention they were given, e.g. one an admin put in, or one from a rule they've since lost. They can't *add* one they aren't allowed. If they remove a kept mention and save, it's gone: adding it back later needs a rule that allows it. Mentions are compared by identity (`@everyone`, `@here` and each role ID count separately), not by how many times they appear. The error names exactly which mentions aren't allowed.
   - "Previously saved message" means their own per-streamer template. If they don't have one yet, it's the server-wide template that's currently used for their posts, since the editor starts from that text. *(Assumption, for the user to confirm.)* Templates have a maximum length so the filled-in message fits Discord's 2000-character limit.
 - **Mention permissions are only checked when saving, not when posting** (user's decision). Whatever passed the save check pings as written: every mention in the saved template text pings, whoever wrote it, even if the member later loses the rule. Each streamer template stores `templateSetBy` (who last saved it), only so the dashboard and audit can show it.
-- **Twitch data can never ping.** This isn't a permission check: the post sets Discord's `allowed_mentions` to exactly the mentions written in the template text, before Twitch values are filled in. So `@everyone` or `<@&role>` in a stream title or game name is shown but never pings. This fixes the existing hole where a stream title containing `@everyone` pings everyone if the bot has Mention Everyone.
+- **Template text is never altered.** A mention that isn't allowed causes the save to be **rejected**, never silently defused or stripped (user's rule).
+- **Twitch data can never ping.** Two layers:
+  1. **Defuse Twitch values only.** `${stream_name}`, `${game_name}` and `${streamer_name}` get a zero-width space after every `@` (`@` → `@\u200B`) before they're inserted. `@everyone`, `@here`, `<@&id>` and `<@id>` in a stream title then show as plain text and can't ping.
+  2. **`allowed_mentions` = the mentions written in the template text**, found before Twitch values are filled in. Role and user mentions can only ping if the template contains them.
+  
+  Both layers are needed. Discord's `@everyone` switch covers the whole message, so a template that legitimately contains `@everyone` would otherwise also let an `@everyone` in the stream title ping. This fixes the existing hole where a stream title containing `@everyone` pings everyone if the bot has Mention Everyone.
 - **Pinging individual users** (`<@id>`) is also checked at save time. A non-admin's template can't add user mentions, so they can't use it for harassment pings. As with other mentions, ones already in the previously saved message can be kept. `${discord_name}` (the streamer themself) is always allowed. It isn't configurable for now.
 - **Existing per-streamer templates on production** ping exactly as before, since posting doesn't check permissions. The only change is that mentions coming from Twitch data no longer ping.
 - If a streamer loses every customization rule, their template is kept and still used, mentions included. They just can't edit it any more; admins still can.
@@ -203,7 +208,7 @@ Every file under `data/` must keep loading after a deploy, with nothing lost and
     - `setOwnTemplate(member, text)`: allows a mention if it's allowed by the member's current rules or present in the previously saved message (own template, or else the server-wide one). The same applies to user mentions (except the streamer themself). It also checks the length limit and records `templateSetBy`. Admin saves aren't mention-checked.
   - **Posting:** build the message with explicit `allowed_mentions`:
     - ping = exactly the mentions written in the template text (no permission check at post time)
-    - never mentions that come from Twitch-supplied values
+    - Twitch-supplied values are defused (`@` → `@\u200B`) before insertion; template text is never altered
   - **Commands:**
     - `/addadminrole` and `/removeadminrole` (Administrator-only by default, and checked by the bot)
     - `/addmessagerole role: allow-everyone: mention-roles:` and `/removemessagerole role:` (admin-only by default)
@@ -267,7 +272,7 @@ Every file under `data/` must keep loading after a deploy, with nothing lost and
   - An admin puts `@everyone` in a streamer's template. The streamer (no `@everyone` rule) edits other text and saves: it's accepted and still pings. They remove it and save, then try to add it back: rejected. The same goes for a user mention.
   - A streamer with no template of their own, whose server-wide template contains `@everyone`, can save an edited copy keeping it.
   - An existing production template with a role mention keeps pinging after deploy.
-  - A stream title containing `@everyone` doesn't ping.
+  - A stream title containing `@everyone`, `@here` or `<@&role>` doesn't ping, even when the template itself contains `@everyone`. The title still reads normally.
   - Existing production templates still behave as before.
   
   Audit: change settings through both commands and the dashboard, and check that each one appears in the server's Audit tab with the right person, source and old → new value. Check that a normal admin doesn't see super-admin-only entries. Remove the dev bot from a test server with block on: check that it leaves, its subscriptions are removed, re-inviting makes it leave again straight away and an attempted-join entry appears in the audit log (with a count after a few retries), and unblocking lets the re-invite stay with the old settings intact. Check that a normal session gets 403 on the admin endpoints and on `enabledTwitchTracking`, and that a user with no access to any server gets no link from `/dashboard` in a DM.
