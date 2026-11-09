@@ -250,7 +250,7 @@ Every file under `data/` must keep loading after a deploy, with nothing lost and
   - accept any `StandardGuildMessageChannel`, so announcement channels work
   - don't try to add or remove the live role for streamers with no linked Discord user (`discordId == 0`)
   — `0f83000`
-- [ ] 5. **System health monitoring (backend).**
+- [x] 5. **System health monitoring (backend).**
   - **`SystemHealth`:** live status per component (Discord, Twitch API, EventSub, Storage), plus `SystemLog`, which appends to `data/system-log.jsonl` (combining repeats, newest 1000, thread-safe).
   - **Hook every error path into it:**
     - `TwitchStreamerWatcher`'s token fetch, API calls (including rate-limit headers), subscription sync, and the swallowed exception in `handleNotification`
@@ -270,6 +270,8 @@ Every file under `data/` must keep loading after a deploy, with nothing lost and
     - **`triggerUpdate()` after `stop()`:** keep the thread reference, and make `triggerUpdate()` do nothing once stopped.
   - **Alerting (confirmed by the user):** DM super admins when a component turns red or recovers, rate-limited, with stdout as the fallback.
   - **Recovery login:** print a single-use super admin login link to stdout (15 minutes) when Discord fails, and hourly while it stays down. This needs the login token store from step 9, so the stdout link is wired up in that step.
+  - Done notes: `Configuration.superAdmins` (optional list) was added here so alerts have recipients; step 9 still adds it to `blank-config.json` and uses it for login. The recovery login link is still step 9's.
+  — `c7917ee`
 - [ ] 6. **Diagnose: check every streamer's setup without waiting for a stream.** Add `Diagnose.run(guild)`, which works out what *would* happen on each streamer's next go-live and reports anything that would fail. It doesn't post or change anything, and doesn't store results. It runs:
   - on demand from the **Diagnose** button
   - automatically when the dashboard loads
@@ -467,9 +469,9 @@ Every known bug is assigned to a step. **The agent doing that step ticks the bug
 
 Race conditions (SiggiHTTP handles each request on its own thread, and JDA command events run on a separate thread, so these overlap in practice):
 - [x] Unlocked load-modify-save of server files, and the stale `lastLiveNotificationId` save. Fixed by step 1. — `ca50202`
-- [ ] Offline arriving right after online: `lastLiveNotificationId` is only saved once Discord confirms the send, so a quick offline finds nothing to delete and the post stays up (commit `d2546e6` cleans it up at the next go-live). Two notifications for the same streamer can also run the cooldown check at the same time. Fix: process events per streamer one at a time (a per-Twitch-ID lock or a single-threaded queue), and have offline wait for an in-flight send. Fixed by step 5.
-- [ ] Token refresh window: `runLoop` clears the token before fetching a new one, and other threads throw "Auth token not available" in the gap, so notifications are dropped. `AuthCache` fields are shared across threads with no synchronization. Fix: keep the old token until the new one is in place, refresh under a lock from any thread, and refresh early when `twitchAppAccessTokenExpiry` is near. This also fixes the expired-token item below. Fixed by step 5.
-- [ ] `triggerUpdate()` NullPointerException after `stop()` sets `thread` to null. Fixed by step 5.
+- [x] Offline arriving right after online: `lastLiveNotificationId` is only saved once Discord confirms the send, so a quick offline finds nothing to delete and the post stays up (commit `d2546e6` cleans it up at the next go-live). Two notifications for the same streamer can also run the cooldown check at the same time. Fix: process events per streamer one at a time (a per-Twitch-ID lock or a single-threaded queue), and have offline wait for an in-flight send. Fixed by step 5. — `c7917ee`
+- [x] Token refresh window: `runLoop` clears the token before fetching a new one, and other threads throw "Auth token not available" in the gap, so notifications are dropped. `AuthCache` fields are shared across threads with no synchronization. Fix: keep the old token until the new one is in place, refresh under a lock from any thread, and refresh early when `twitchAppAccessTokenExpiry` is near. This also fixes the expired-token item below. Fixed by step 5. — `c7917ee`
+- [x] `triggerUpdate()` NullPointerException after `stop()` sets `thread` to null. Fixed by step 5. — `c7917ee`
 
 Security:
 - [ ] Twitch stream titles (and other Twitch values) are inserted into the live message with no mention filtering, so a title containing `@everyone`/`@here` or `<@&role>` pings if the bot has the permission. Fixed by step 8 (defusing Twitch values plus `allowed_mentions`).
@@ -478,7 +480,7 @@ Other:
 
 - [x] `getStreamer` (`TwitchCommandHandler`) matches the wrong streamer when only a Twitch name is given: `discordUserId` is 0, so any streamer with `discordId == 0` matches first. `/deletestreamer twitch-name:X` can delete someone else. Fixed by step 2. — `23b908e`
 - [x] `/addstreamer` with a nonexistent Twitch name NPEs (`getStreamerInfoByUsername` returns null) → generic error instead of a helpful message. Fixed by step 2. — `23b908e`
-- [ ] Expired Twitch app token isn't detected in the notification path: `getAuthToken` never checks `twitchAppAccessTokenExpiry`, and failures in `handleNotification` are swallowed, so live posts silently fail until the hourly loop refreshes the token. Fixed by step 5.
+- [x] Expired Twitch app token isn't detected in the notification path: `getAuthToken` never checks `twitchAppAccessTokenExpiry`, and failures in `handleNotification` are swallowed, so live posts silently fail until the hourly loop refreshes the token. Fixed by step 5. — `c7917ee`
 - [x] Announcement (news) channels are silently skipped: `handleLiveNotification` only accepts `TextChannel`, so a live channel that's an announcement channel never gets posts, and nothing reports it. Fix: accept any `StandardGuildMessageChannel` (text and announcement). Diagnose (step 6) flags it in the meantime. Fixed by step 4. — `0f83000`
 - [ ] `${twitch_link}` and `/streamerlist` links use display name instead of login name — breaks for non-Latin display names. Fixed by steps 2 (`/streamerlist`) and 8 (`${twitch_link}`). The `/streamerlist` part is done (`23b908e`); `${twitch_link}` is still open.
 - [x] `/setchanneloverride`'s `channel` option is `OptionType.STRING` rather than `CHANNEL`; that's why `getChannelId` has the "JDA bug" `<#…>` stripping workaround. Fixed by step 2. — `23b908e`
