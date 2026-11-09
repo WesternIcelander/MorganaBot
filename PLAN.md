@@ -52,6 +52,7 @@ Every file under `data/` must keep loading after a deploy, with nothing lost and
   - Step 5 adds an optional `superAdmins` key to `config.json`. If it's missing, there are no super admins.
   - Sessions and login tokens live in memory only.
   - `ServerInfo`, `Streamer`, `UserData`, `AuthCache` and the existing `config.json` keys stay exactly as they are.
+- **Per-server data stays in per-server files** (`data/servers/<guildId>.json`, `data/servers/<guildId>-problems.json`). Nothing per-server is ever bundled into a shared file. Only bot-wide state (`config.json`, `auth-cache.json`, the Twitch status) is global.
 - **Additive changes are preferred:** new fields with a safe default when missing. Gson leaves a missing field at its initializer, because these classes have no-arg constructors. Gson also ignores unknown fields, so a rollback to the old jar keeps working with new files.
 - **If a step ever needs to rename, move, restructure or change the meaning of stored data:**
   - Add `dataVersion` to that file type, where a missing value means version 0, today's format.
