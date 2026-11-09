@@ -16,7 +16,7 @@ import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.entities.Message;
 import net.dv8tion.jda.api.entities.Role;
 import net.dv8tion.jda.api.entities.UserSnowflake;
-import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
+import net.dv8tion.jda.api.entities.channel.middleman.StandardGuildMessageChannel;
 import net.dv8tion.jda.api.entities.channel.middleman.GuildChannel;
 
 import javax.crypto.Mac;
@@ -217,13 +217,13 @@ public class TwitchStreamerWatcher {
         if (streamer.channelToPostLiveNotifications != 0L) {
             channelIdToPostIn = streamer.channelToPostLiveNotifications;
         }
-        TextChannel textChannel;
+        StandardGuildMessageChannel textChannel;
         if (channelIdToPostIn == 0L) {
             textChannel = null;
         } else {
             GuildChannel channelToPostIn = guild.getGuildChannelById(channelIdToPostIn);
-            if (channelToPostIn instanceof TextChannel) {
-                textChannel = (TextChannel) channelToPostIn;
+            if (channelToPostIn instanceof StandardGuildMessageChannel) {
+                textChannel = (StandardGuildMessageChannel) channelToPostIn;
             } else {
                 textChannel = null;
             }
