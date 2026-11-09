@@ -56,14 +56,27 @@ public class ServerSettings {
     }
 
     /**
-     * Refers to an existing streamer entry by Twitch name, linked Discord user, or both.
+     * Refers to an existing streamer entry by Twitch name, Twitch ID, linked Discord user, or a combination.
      *
-     * @param twitchName    Twitch login name, or null if not given
+     * @param twitchName    Twitch login name, or null if not given (looked up on Twitch)
      * @param discordUserId linked Discord user ID, or 0 if not given
+     * @param twitchId      Twitch user ID, or null if not given (matched as is, no Twitch lookup; the dashboard uses
+     *                      this). Ignored if {@code twitchName} is given.
      */
-    public record StreamerRef(String twitchName, long discordUserId) {
+    public record StreamerRef(String twitchName, long discordUserId, String twitchId) {
+        public StreamerRef(String twitchName, long discordUserId) {
+            this(twitchName, discordUserId, null);
+        }
+
+        /**
+         * The entry with this Twitch user ID.
+         */
+        public static StreamerRef byTwitchId(String twitchId) {
+            return new StreamerRef(null, 0L, twitchId);
+        }
+
         public boolean isEmpty() {
-            return twitchName == null && discordUserId == 0L;
+            return twitchName == null && twitchId == null && discordUserId == 0L;
         }
     }
 
@@ -1163,7 +1176,7 @@ public class ServerSettings {
     }
 
     private static ServerInfo.Streamer findStreamer(ServerInfo serverInfo, StreamerRef ref, TwitchUser user) throws SettingsException {
-        return findStreamer(serverInfo, ref, user == null ? null : user.id());
+        return findStreamer(serverInfo, ref, user != null ? user.id() : ref.twitchName() == null ? ref.twitchId() : null);
     }
 
     /**
@@ -1181,7 +1194,7 @@ public class ServerSettings {
                 byDiscord = streamer;
             }
         }
-        boolean byTwitchGiven = ref.twitchName() != null;
+        boolean byTwitchGiven = ref.twitchName() != null || ref.twitchId() != null;
         boolean byDiscordGiven = ref.discordUserId() != 0L;
         if ((byTwitchGiven && byTwitch == null) || (byDiscordGiven && byDiscord == null)) {
             throw new SettingsException("No such streamer was found!");

@@ -192,7 +192,7 @@ public class Access {
         return false;
     }
 
-    static boolean hasRule(ServerInfo info, List<Long> roles) {
+    public static boolean hasRule(ServerInfo info, List<Long> roles) {
         for (ServerInfo.MessageCustomizationRule rule : info.messageCustomizationRules()) {
             if (rule != null && rule.roleId != 0L && roles.contains(rule.roleId)) return true;
         }
