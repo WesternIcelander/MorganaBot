@@ -272,7 +272,7 @@ Every file under `data/` must keep loading after a deploy, with nothing lost and
   - **Recovery login:** print a single-use super admin login link to stdout (15 minutes) when Discord fails, and hourly while it stays down. This needs the login token store from step 9, so the stdout link is wired up in that step.
   - Done notes: `Configuration.superAdmins` (optional list) was added here so alerts have recipients; step 9 still adds it to `blank-config.json` and uses it for login. The recovery login link is still step 9's.
   — `c7917ee`
-- [ ] 6. **Diagnose: check every streamer's setup without waiting for a stream.** Add `Diagnose.run(guild)`, which works out what *would* happen on each streamer's next go-live and reports anything that would fail. It doesn't post or change anything, and doesn't store results. It runs:
+- [x] 6. **Diagnose: check every streamer's setup without waiting for a stream.** Add `Diagnose.run(guild)`, which works out what *would* happen on each streamer's next go-live and reports anything that would fail. It doesn't post or change anything, and doesn't store results. It runs:
   - on demand from the **Diagnose** button
   - automatically when the dashboard loads
   - after every save, so a newly picked channel the bot can't post in gets flagged straight away
@@ -302,6 +302,8 @@ Every file under `data/` must keep loading after a deploy, with nothing lost and
   - **Status notes:** the Twitch subscription disabled by Twitch (from step 5's EventSub statuses). *(Step 7 adds: paused because the self-service role was lost, with the date.)*
 
   **Result per check:** OK, warning (it posts, but something is degraded, e.g. a mention won't ping), or error (nothing will post). Each has a plain-English reason and a fix hint, e.g. "Give MorganaBot *Send Messages* in #live, or pick another channel". Results are grouped by streamer, with server-wide issues first.
+  - Done notes: announcement channels pass the channel check (step 4 already fixed posting there). The Diagnose button, load and after-save runs in the dashboard are wired up with the API/UI (steps 11 and 13); for now the channel and live role commands append any problems with the new value to their reply. Twitch "disabled" notes are kept for 24 hours (`SubscriptionNotes`), and a subscription the sync couldn't create is reported too (error for go-live).
+  — `2c4e8d7`
 - [ ] 7. **Self-service streamer adding (backend and commands).**
   - **Data:** add to `ServerInfo`: `selfServiceRoles: List<{roleId, channelId}>` (missing = empty, which turns the feature off) and `selfServiceRemoveAfterDays` (default 7, 0 = never). Add to `Streamer`: `selfService`, `addedBy`, `selfServiceLostAt` and `channelOverridePinned`. All of them are additive.
   - **Intents:** enable `GUILD_MEMBERS` in `JDABuilder` with `MemberCachePolicy.ALL` and `ChunkingFilter.ALL`. That's fine for a private bot in fewer than 100 servers. JDA only fires role-change events for cached members.
