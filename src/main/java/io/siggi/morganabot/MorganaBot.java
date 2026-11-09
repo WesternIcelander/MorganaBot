@@ -7,6 +7,7 @@ import io.siggi.morganabot.config.AuthCache;
 import io.siggi.morganabot.config.Configuration;
 import io.siggi.morganabot.config.Data;
 import io.siggi.morganabot.config.ServerInfoStore;
+import io.siggi.morganabot.problems.ServerProblems;
 import io.siggi.morganabot.config.UserData;
 import io.siggi.morganabot.util.Util;
 import io.siggi.processapi.ProcessAPI;
@@ -61,6 +62,7 @@ public class MorganaBot {
     private ServerInfoStore serverInfoStore;
     private ServerSettings serverSettings;
     private AuditLog auditLog;
+    private ServerProblems serverProblems;
 
     public Gson getGson() {
         return gson;
@@ -84,6 +86,10 @@ public class MorganaBot {
 
     public AuditLog getAuditLog() {
         return auditLog;
+    }
+
+    public ServerProblems getServerProblems() {
+        return serverProblems;
     }
 
     /**
@@ -151,6 +157,7 @@ public class MorganaBot {
         authCache = Data.read(new File(Util.getDataRoot(), "auth-cache.json"), AuthCache.class, gson);
         serverInfoStore = new ServerInfoStore(new File(Util.getDataRoot(), "servers"), gson);
         auditLog = new AuditLog(new File(Util.getDataRoot(), "servers"), gson, serverInfoStore, new DiscordNames());
+        serverProblems = new ServerProblems(new File(Util.getDataRoot(), "servers"), gson, serverInfoStore);
         serverSettings = new ServerSettings(serverInfoStore, new ServerSettings.Twitch() {
             @Override
             public ServerSettings.TwitchUser findUserByLogin(String login) throws IOException {

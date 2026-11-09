@@ -8,6 +8,9 @@ import io.siggi.morganabot.config.AuthCache;
 import io.siggi.morganabot.config.Configuration;
 import io.siggi.morganabot.config.ServerInfo;
 import io.siggi.morganabot.config.ServerInfoStore;
+import io.siggi.morganabot.problems.FailureReasons;
+import io.siggi.morganabot.problems.Problem;
+import io.siggi.morganabot.problems.ServerProblems;
 import io.siggi.morganabot.util.EndpointCaller;
 import io.siggi.morganabot.util.MapBuilder;
 import io.siggi.morganabot.util.Util;
@@ -17,8 +20,10 @@ import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.entities.Message;
 import net.dv8tion.jda.api.entities.Role;
 import net.dv8tion.jda.api.entities.UserSnowflake;
-import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
 import net.dv8tion.jda.api.entities.channel.middleman.GuildChannel;
+import net.dv8tion.jda.api.entities.channel.middleman.StandardGuildMessageChannel;
+import net.dv8tion.jda.api.exceptions.ErrorResponseException;
+import net.dv8tion.jda.api.requests.ErrorResponse;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -36,6 +41,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
 
 import static io.siggi.morganabot.util.Util.urlEncode;
 
@@ -231,74 +237,165 @@ public class TwitchStreamerWatcher {
     }
 
     private void handleLiveNotification(JDA jda, Guild guild, ServerInfo serverInfo, ServerInfo.Streamer streamer, String streamerId, String streamerName, JsonObject channelInfo, boolean goingOnline, boolean postMessage) {
-        Role liveRole = serverInfo.roleForLiveUsers == 0L ? null : guild.getRoleById(serverInfo.roleForLiveUsers);
+        long guildId = guild.getIdLong();
+        Problem.Target streamerTarget = Problem.Target.streamer(streamerId, streamerName);
+
+        // The live role only applies to streamers linked to a Discord user.
+        boolean useLiveRole = serverInfo.roleForLiveUsers != 0L && streamer.discordId != 0L;
+        Role liveRole = useLiveRole ? guild.getRoleById(serverInfo.roleForLiveUsers) : null;
+
         long channelIdToPostIn = serverInfo.channelToPostLiveNotifications;
         if (streamer.channelToPostLiveNotifications != 0L) {
             channelIdToPostIn = streamer.channelToPostLiveNotifications;
         }
-        TextChannel textChannel;
+        // Text and announcement channels both work.
+        StandardGuildMessageChannel channel = null;
+        String channelProblem = null;
+        String channelName = null;
         if (channelIdToPostIn == 0L) {
-            textChannel = null;
+            channelProblem = "No live channel is set";
         } else {
             GuildChannel channelToPostIn = guild.getGuildChannelById(channelIdToPostIn);
-            if (channelToPostIn instanceof TextChannel) {
-                textChannel = (TextChannel) channelToPostIn;
+            if (channelToPostIn == null) {
+                channelProblem = "Unknown channel (deleted?)";
             } else {
-                textChannel = null;
-            }
-        }
-        if (goingOnline) {
-            if (serverInfo.roleForLiveUsers != 0L) {
-                if (liveRole != null) {
-                    guild.addRoleToMember(UserSnowflake.fromId(streamer.discordId), liveRole).queue();
+                channelName = channelToPostIn.getName();
+                if (channelToPostIn instanceof StandardGuildMessageChannel messageChannel) {
+                    channel = messageChannel;
+                } else {
+                    channelProblem = "#" + channelName + " is not a text or announcement channel";
                 }
             }
+        }
+        Problem.Target channelTarget = channelIdToPostIn == 0L ? null : Problem.Target.channel(channelIdToPostIn, channelName);
+
+        if (useLiveRole) {
+            String action = goingOnline ? Problem.ADD_LIVE_ROLE : Problem.REMOVE_LIVE_ROLE;
+            if (liveRole == null) {
+                recordProblem(guildId, new Problem(action, Problem.Target.role(serverInfo.roleForLiveUsers, null), streamerTarget,
+                        "The live role was deleted"));
+            } else {
+                Problem.Target roleTarget = Problem.Target.role(liveRole.getIdLong(), liveRole.getName());
+                Consumer<Throwable> onFailure = error -> recordProblem(guildId, new Problem(action, roleTarget, streamerTarget,
+                        FailureReasons.describe(error, action, null, liveRole.getName())));
+                try {
+                    UserSnowflake user = UserSnowflake.fromId(streamer.discordId);
+                    (goingOnline ? guild.addRoleToMember(user, liveRole) : guild.removeRoleFromMember(user, liveRole))
+                            .queue(null, onFailure);
+                } catch (Exception e) {
+                    onFailure.accept(e);
+                }
+            }
+        }
+
+        if (goingOnline) {
             boolean silent = false;
             if (!postMessage && serverInfo.deleteNotificationsOnOffline) {
                 silent = true;
                 postMessage = true;
             }
-            if (serverInfo.deleteNotificationsOnOffline && streamer.lastLiveNotificationId != 0L && textChannel != null) {
-                textChannel.deleteMessageById(streamer.lastLiveNotificationId).queue();
+            if (serverInfo.deleteNotificationsOnOffline && streamer.lastLiveNotificationId != 0L) {
+                // Clean up a post left behind if Twitch didn't send us the offline notification.
+                deleteLiveMessage(guildId, channel, channelTarget, channelName, channelProblem, streamerId, streamerTarget, streamer.lastLiveNotificationId);
             }
-            if (postMessage && textChannel != null) {
-                    String liveMessage = streamer.liveNotificationTemplate;
-                    if (liveMessage == null) liveMessage = serverInfo.liveNotificationTemplate;
-                    if (liveMessage == null) liveMessage = "${streamer_name} has gone live on Twitch, playing ${game_name}! Check 'em out!\n${twitch_link}";
-                    String gameName = Util.markdownEscape(channelInfo.get("game_name").getAsString());
-                    String streamName = Util.markdownEscape(channelInfo.get("title").getAsString());
-                    String streamerNameEscaped = Util.markdownEscape(streamerName);
-                    String discordMention = streamer.discordId == 0L ? "?" : ("<@" + streamer.discordId + ">");
-                    liveMessage = liveMessage
-                            .replace("${game_name}", gameName)
-                            .replace("${stream_name}", streamName)
-                            .replace("${streamer_name}", streamerNameEscaped)
-                            .replace("${twitch_link}", "https://www.twitch.tv/" + streamerName)
-                            .replace("${discord_name}", discordMention);
-                    textChannel.sendMessage(liveMessage).setSuppressedNotifications(silent).submit(true).thenAccept((message) -> {
+            if (postMessage) {
+                if (channel == null) {
+                    recordProblem(guildId, new Problem(Problem.SEND_LIVE_MESSAGE, channelTarget, streamerTarget, "Not posted: " + channelProblem));
+                    return;
+                }
+                String liveMessage = streamer.liveNotificationTemplate;
+                if (liveMessage == null) liveMessage = serverInfo.liveNotificationTemplate;
+                if (liveMessage == null) liveMessage = "${streamer_name} has gone live on Twitch, playing ${game_name}! Check 'em out!\n${twitch_link}";
+                String gameName = Util.markdownEscape(channelInfo.get("game_name").getAsString());
+                String streamName = Util.markdownEscape(channelInfo.get("title").getAsString());
+                String streamerNameEscaped = Util.markdownEscape(streamerName);
+                String discordMention = streamer.discordId == 0L ? "?" : ("<@" + streamer.discordId + ">");
+                liveMessage = liveMessage
+                        .replace("${game_name}", gameName)
+                        .replace("${stream_name}", streamName)
+                        .replace("${streamer_name}", streamerNameEscaped)
+                        .replace("${twitch_link}", "https://www.twitch.tv/" + streamerName)
+                        .replace("${discord_name}", discordMention);
+                String finalChannelName = channelName;
+                Consumer<Throwable> onFailure = error -> recordProblem(guildId, new Problem(Problem.SEND_LIVE_MESSAGE, channelTarget, streamerTarget,
+                        FailureReasons.describe(error, Problem.SEND_LIVE_MESSAGE, finalChannelName, null)));
+                try {
+                    channel.sendMessage(liveMessage).setSuppressedNotifications(silent).queue(message -> {
                         // Save against the current data, not the snapshot taken before sending, so changes made
                         // in the meantime aren't reverted. If the streamer was removed meanwhile, do nothing.
-                        bot.getServerInfoStore().modify(guild.getIdLong(), info -> {
-                            for (ServerInfo.Streamer current : info.streamers) {
-                                if (streamerId.equals(current.twitchId)) {
-                                    current.lastLiveNotificationId = message.getIdLong();
-                                    break;
+                        try {
+                            bot.getServerInfoStore().modify(guildId, info -> {
+                                for (ServerInfo.Streamer current : info.streamers) {
+                                    if (streamerId.equals(current.twitchId)) {
+                                        current.lastLiveNotificationId = message.getIdLong();
+                                        break;
+                                    }
                                 }
-                            }
-                            return null;
-                        });
-                    });
-            }
-        } else {
-            if (serverInfo.roleForLiveUsers != 0L) {
-                if (liveRole != null) {
-                    guild.removeRoleFromMember(UserSnowflake.fromId(streamer.discordId), liveRole).queue();
+                                return null;
+                            });
+                        } catch (Exception e) {
+                            e.printStackTrace();
+                        }
+                    }, onFailure);
+                } catch (Exception e) {
+                    onFailure.accept(e);
                 }
             }
-            if (serverInfo.deleteNotificationsOnOffline && textChannel != null && streamer.lastLiveNotificationId != 0L) {
-                textChannel.deleteMessageById(streamer.lastLiveNotificationId).queue();
+        } else {
+            if (serverInfo.deleteNotificationsOnOffline && streamer.lastLiveNotificationId != 0L) {
+                deleteLiveMessage(guildId, channel, channelTarget, channelName, channelProblem, streamerId, streamerTarget, streamer.lastLiveNotificationId);
             }
         }
+    }
+
+    /**
+     * Deletes a previous live post. Once it's gone (deleted now, or already missing), the stored ID is cleared so
+     * the next go-live doesn't try to delete it again.
+     */
+    private void deleteLiveMessage(long guildId, StandardGuildMessageChannel channel, Problem.Target channelTarget, String channelName,
+                                   String channelProblem, String streamerId, Problem.Target streamerTarget, long messageId) {
+        String action = Problem.DELETE_LIVE_MESSAGE;
+        if (channel == null) {
+            recordProblem(guildId, new Problem(action, channelTarget, streamerTarget, "Not deleted: " + channelProblem));
+            return;
+        }
+        Runnable clearId = () -> {
+            try {
+                bot.getServerInfoStore().modify(guildId, info -> {
+                    for (ServerInfo.Streamer current : info.streamers) {
+                        if (streamerId.equals(current.twitchId) && current.lastLiveNotificationId == messageId) {
+                            current.lastLiveNotificationId = 0L;
+                            break;
+                        }
+                    }
+                    return null;
+                });
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        };
+        Consumer<Throwable> onFailure = error -> {
+            Throwable cause = FailureReasons.unwrap(error);
+            if (cause instanceof ErrorResponseException e && e.getErrorResponse() == ErrorResponse.UNKNOWN_MESSAGE) {
+                clearId.run();
+            }
+            recordProblem(guildId, new Problem(action, channelTarget, streamerTarget,
+                    FailureReasons.describe(error, action, channelName, null)));
+        };
+        try {
+            channel.deleteMessageById(messageId).queue(ignored -> clearId.run(), onFailure);
+        } catch (Exception e) {
+            onFailure.accept(e);
+        }
+    }
+
+    private void recordProblem(long guildId, Problem problem) {
+        ServerProblems problems = bot.getServerProblems();
+        if (problems == null) {
+            System.err.println("Problem in guild " + guildId + ": " + problem);
+            return;
+        }
+        problems.record(guildId, problem);
     }
 
     private void runLoop() {
