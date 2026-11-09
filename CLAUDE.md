@@ -19,6 +19,8 @@ Discord bot (Java 17, Maven, JDA 6) that posts in Discord channels when Twitch s
 - `config/` — `Data` base class (Gson read; save via temp file + rename). Per-guild `data/servers/<id>.json` (`ServerInfo`), per-user `data/users/<id>.json` (`UserData`), `config.json`, `auth-cache.json`. Read fresh from disk on each access, no caching/locking.
 - `util/` — `EndpointCaller` (HttpURLConnection wrapper), `MapBuilder`, `Util`.
 
+MorganaBot is a **private** bot: it's in fewer than 100 servers, and that's not expected to change. It has all privileged gateway intents. Anyone else who wants it can build and run their own copy.
+
 Twitch features are gated per guild by `enabledTwitchTracking`, which is only set by hand-editing the server JSON.
 
 ## Settings policy
