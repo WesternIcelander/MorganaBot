@@ -21,6 +21,10 @@ Discord bot (Java 17, Maven, JDA 6) that posts in Discord channels when Twitch s
 
 Twitch features are gated per guild by `enabledTwitchTracking`, which is only set by hand-editing the server JSON.
 
+## Data compatibility
+
+Production runs on the current `data/` format. Any change to stored data must keep old files loading, with an automatic migration if the change isn't additive. Prefer new optional fields with safe defaults. For renames or restructures, add a `dataVersion`, migrate on load, and write a `.bak` copy before the first migrated save. Server JSON files are hand-edited on production while the bot runs (e.g. `enabledTwitchTracking`), so any caching must notice those edits and reload. Details are in PLAN.md → Data compatibility.
+
 ## Repo workflow
 
 - `CLAUDE.md` and `PLAN.md` live in `plan/`, a git worktree on the `plan` branch (separate history). The root-level files are symlinks. `plan/`, `CLAUDE.md`, `PLAN.md` are in `.git/info/exclude`.
