@@ -23,10 +23,6 @@ public class Listener extends ListenerAdapter {
                     TimeHandler.generateTime(bot, event);
                 }
                 break;
-                case "letmein": {
-                    MinecraftHandler.minecraftWhitelist(bot, event);
-                }
-                break;
                 case "addstreamer": {
                     TwitchCommandHandler.addStreamer(bot, event);
                 }

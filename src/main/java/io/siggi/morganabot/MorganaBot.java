@@ -92,10 +92,6 @@ public class MorganaBot {
                         .addOption(OptionType.STRING, "timezone", "Which timezone?", false, true)
                         .setIntegrationTypes(IntegrationType.GUILD_INSTALL, IntegrationType.USER_INSTALL)
                         .setContexts(InteractionContextType.GUILD, InteractionContextType.PRIVATE_CHANNEL),
-                Commands.slash("letmein", "Add yourself to the whitelist on our Minecraft server!")
-                        .addOption(OptionType.STRING, "username", "What's your username on Minecraft?", true)
-                        .addOption(OptionType.BOOLEAN, "cracked", "If you didn't buy Minecraft, set this to True", false)
-                        .setDefaultPermissions(DefaultMemberPermissions.DISABLED),
                 Commands.slash("setstreamerrole", "Set the role to give to those currently streaming")
                         .addOption(OptionType.ROLE, "role", "Which role is the live role?", true)
                         .setDefaultPermissions(DefaultMemberPermissions.DISABLED),
