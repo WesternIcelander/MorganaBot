@@ -25,6 +25,11 @@ public final class Actor {
          */
         @SerializedName("superAdmin") SUPER_ADMIN,
         /**
+         * A member adding or removing their own streamer entry (self-service). {@link #command} holds the command, or
+         * is null for the dashboard.
+         */
+        @SerializedName("selfService") SELF_SERVICE,
+        /**
          * The bot itself (e.g. automatic clean-up).
          */
         @SerializedName("system") SYSTEM
@@ -40,7 +45,8 @@ public final class Actor {
     public String name;
     public Source source;
     /**
-     * The slash command, e.g. {@code /setlivechannel}, for {@link Source#COMMAND}; null otherwise.
+     * The slash command, e.g. {@code /setlivechannel}, for {@link Source#COMMAND} (and {@link Source#SELF_SERVICE} from a
+     * command); null otherwise.
      */
     public String command;
 
@@ -69,6 +75,16 @@ public final class Actor {
         return new Actor(Long.toString(userId), name, Source.SUPER_ADMIN, null);
     }
 
+    /**
+     * A member managing their own entry.
+     *
+     * @param command the slash command, or null for the dashboard
+     */
+    public static Actor selfService(long userId, String name, String command) {
+        return new Actor(Long.toString(userId), name, Source.SELF_SERVICE,
+                command == null ? null : command.startsWith("/") ? command : "/" + command);
+    }
+
     public static Actor system() {
         return new Actor(null, "system", Source.SYSTEM, null);
     }
@@ -92,6 +108,7 @@ public final class Actor {
             case COMMAND -> name + " (" + userId + ") via " + command;
             case DASHBOARD -> name + " (" + userId + ") via dashboard";
             case SUPER_ADMIN -> "bot admin " + name + " (" + userId + ")";
+            case SELF_SERVICE -> name + " (" + userId + ") via self-service" + (command == null ? "" : " " + command);
         };
     }
 }

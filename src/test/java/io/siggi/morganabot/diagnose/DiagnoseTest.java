@@ -42,6 +42,12 @@ class DiagnoseTest {
         final Set<Long> members = new HashSet<>();
         final Set<Permission> guildPermissions = EnumSet.of(Permission.MANAGE_ROLES);
         final Set<Long> unknownMembers = new HashSet<>();
+        final Map<Long, List<Long>> memberRoles = new HashMap<>();
+
+        @Override
+        public List<Long> memberRoles(long userId) {
+            return memberRoles.get(userId);
+        }
 
         @Override
         public String botName() {
@@ -357,5 +363,66 @@ class DiagnoseTest {
     void summaryWording() {
         assertEquals("0 streamers checked: 0 OK, 0 warnings, 0 errors", run().summary);
         assertEquals("streamers", run().server.get(run().server.size() - 1).code);
+    }
+
+    // --- self-service (step 7) ---
+
+    private static final long SS_ROLE = 30L;
+    private static final long SS_ROLE_EMPTY = 31L;
+
+    @Test
+    void missingSelfServiceRoleAndBrokenRoleChannelAreFlagged() {
+        info.selfServiceRoles.add(new ServerInfo.SelfServiceRole(99L, 0L));
+        info.selfServiceRoles.add(new ServerInfo.SelfServiceRole(PING_ROLE, VOICE));
+        DiagnoseResult result = run();
+        Check missing = find(result.server, "selfService.role.exists");
+        assertNotNull(missing);
+        assertEquals(Level.WARNING, missing.level);
+        Check type = find(result.server, "selfService.channel.type");
+        assertNotNull(type);
+        assertEquals(Level.WARNING, type.level, "the streamers posting there get the error");
+        assertTrue(type.message.contains("@Pings"), type.message);
+    }
+
+    @Test
+    void selfServiceChannelLabelNamesTheRole() {
+        guild.roles.put(SS_ROLE, new RoleView(SS_ROLE, "VIP", false, false, false, true));
+        guild.roles.put(SS_ROLE_EMPTY, new RoleView(SS_ROLE_EMPTY, "Members", false, false, false, true));
+        info.selfServiceRoles.add(new ServerInfo.SelfServiceRole(SS_ROLE, VIP));
+        info.selfServiceRoles.add(new ServerInfo.SelfServiceRole(SS_ROLE_EMPTY, 0L));
+        ServerInfo.Streamer vip = addStreamer("1", 100L, VIP);
+        vip.selfService = true;
+        guild.memberRoles.put(100L, List.of(SS_ROLE, SS_ROLE_EMPTY));
+        ServerInfo.Streamer member = addStreamer("2", 101L, 0L);
+        member.selfService = true;
+        guild.members.add(101L);
+        guild.memberRoles.put(101L, List.of(SS_ROLE_EMPTY));
+        ServerInfo.Streamer pinned = addStreamer("3", 102L, LIVE);
+        pinned.selfService = true;
+        pinned.channelOverridePinned = true;
+
+        DiagnoseResult result = run();
+        assertEquals("#vip-live (from role @VIP)", result.streamer("1").channel);
+        assertEquals("#live (server default, from role @Members)", result.streamer("2").channel);
+        assertEquals("#live (set by an admin)", result.streamer("3").channel);
+        assertTrue(find(result.server, "selfService.role") != null);
+    }
+
+    @Test
+    void pausedSelfAddedStreamerIsNoted() {
+        info.selfServiceRemoveAfterDays = 7;
+        ServerInfo.Streamer streamer = addStreamer("1", 100L, 0L);
+        streamer.selfService = true;
+        streamer.selfServiceLostAt = 1_699_000_000_000L;
+        DiagnoseResult result = run();
+        Check paused = find(checks(result, "1"), "selfService.paused");
+        assertNotNull(paused);
+        assertEquals(Level.WARNING, paused.level);
+        assertTrue(paused.message.contains("2023-11-03"), paused.message);
+        assertTrue(paused.message.contains("removed on 2023-11-10"), paused.message);
+
+        // An admin-added streamer with the same timestamp isn't paused.
+        streamer.selfService = false;
+        assertNull(find(checks(run(), "1"), "selfService.paused"));
     }
 }

@@ -10,6 +10,8 @@ import io.siggi.morganabot.diagnose.Diagnose;
 import io.siggi.morganabot.diagnose.JdaGuildView;
 import io.siggi.morganabot.health.Health;
 import io.siggi.morganabot.util.Util;
+import net.dv8tion.jda.api.entities.Member;
+import net.dv8tion.jda.api.entities.Role;
 import net.dv8tion.jda.api.entities.User;
 import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent;
 import net.dv8tion.jda.api.interactions.commands.OptionMapping;
@@ -76,6 +78,23 @@ public class TwitchCommandHandler {
         handle(event, () -> {
             long guildId = event.getGuild().getIdLong();
             long channelId = getChannelId(event, "channel");
+            OptionMapping roleBased = event.getOption("role-based");
+            if (roleBased != null && roleBased.getAsBoolean()) {
+                if (event.getOption("channel") != null) {
+                    return "Pick either a channel or role-based, not both.";
+                }
+                ServerInfo.Streamer streamer = bot.getServerSettings().unpinChannel(actor(event), guildId, getStreamerRef(event));
+                long effective = streamer.channelToPostLiveNotifications;
+                String where;
+                if (streamer.isSelfServicePaused()) {
+                    where = "They have no self-service role right now, so their posts are paused; the channel will follow their role once they get one back.";
+                } else if (effective == 0L) {
+                    where = "Their posts now go to the server's default live channel.";
+                } else {
+                    where = "Their posts now go to <#" + effective + ">." + channelWarnings(event, effective, "change the channel of their self-service role");
+                }
+                return "The channel for " + describe(streamer, event) + " follows their role again. " + where;
+            }
             ServerInfo.Streamer streamer = bot.getServerSettings().setChannelOverride(actor(event), guildId, getStreamerRef(event), channelId);
             if (channelId == 0L) {
                 return "Removed override for " + describe(streamer, event);
@@ -146,6 +165,74 @@ public class TwitchCommandHandler {
         });
     }
 
+    // --- self-service ---
+
+    static void selfSetTwitch(MorganaBot bot, SlashCommandInteractionEvent event) {
+        handle(event, () -> {
+            Member member = event.getMember();
+            ServerSettings.SelfSetResult result = bot.getServerSettings().selfSetTwitch(selfActor(event),
+                    SelfServiceListener.of(member), getString(event, "twitch-name"));
+            ServerInfo info = bot.getServerInfoStore().get(event.getGuild().getIdLong());
+            StringBuilder sb = new StringBuilder();
+            sb.append(result.added() ? "Added you as a streamer: " : "Your Twitch channel is now ")
+                    .append("[").append(Util.markdownEscape(result.user().displayName())).append("](<https://www.twitch.tv/")
+                    .append(result.user().login()).append(">).\n");
+            long effective = result.channelId() != 0L ? result.channelId() : info.channelToPostLiveNotifications;
+            if (effective == 0L) {
+                sb.append("Your live posts have nowhere to go yet: this server has no default live channel. Ask an admin to set one.");
+            } else {
+                sb.append("Your live posts will go to <#").append(effective).append(">")
+                        .append(result.channelId() != 0L ? " (from your role <@&" + result.roleId() + ">)." : " (the server's default live channel).")
+                        .append(channelWarnings(event, effective, "ask an admin to pick another channel"));
+            }
+            return sb.toString();
+        });
+    }
+
+    static void selfRemove(MorganaBot bot, SlashCommandInteractionEvent event) {
+        handle(event, () -> {
+            bot.getServerSettings().selfRemove(selfActor(event), event.getGuild().getIdLong(), event.getUser().getIdLong());
+            return "Removed you as a streamer in this server.";
+        });
+    }
+
+    static void addSelfServiceRole(MorganaBot bot, SlashCommandInteractionEvent event) {
+        handle(event, () -> {
+            Role role = event.getOption("role").getAsRole();
+            long channelId = getChannelId(event, "channel");
+            if (role.isPublicRole()) {
+                return "The @everyone role can't be a self-service role.";
+            }
+            bot.getServerSettings().addSelfServiceRole(actor(event), event.getGuild().getIdLong(), role.getIdLong(), channelId);
+            return "Members with <@&" + role.getIdLong() + "> can now add themselves with /settwitchchannel. Their live posts go to "
+                    + (channelId == 0L ? "the server's default live channel" : "<#" + channelId + ">")
+                    + " when that's their highest self-service role."
+                    + (channelId != 0L ? channelWarnings(event, channelId, "pick another channel for this role") : "");
+        });
+    }
+
+    static void removeSelfServiceRole(MorganaBot bot, SlashCommandInteractionEvent event) {
+        handle(event, () -> {
+            long roleId = event.getOption("role").getAsRole().getIdLong();
+            boolean removed = bot.getServerSettings().removeSelfServiceRole(actor(event), event.getGuild().getIdLong(), roleId);
+            return removed
+                    ? "<@&" + roleId + "> is no longer a self-service role. Self-added streamers without another self-service role are paused."
+                    : "<@&" + roleId + "> isn't a self-service role.";
+        });
+    }
+
+    static void setSelfServiceExpiry(MorganaBot bot, SlashCommandInteractionEvent event) {
+        handle(event, () -> {
+            OptionMapping days = event.getOption("days");
+            if (days == null) return "You need to give a number of days!";
+            int value = days.getAsInt();
+            bot.getServerSettings().setSelfServiceRemoveAfterDays(actor(event), event.getGuild().getIdLong(), value);
+            return value == 0
+                    ? "Self-added streamers who lose their self-service role are paused and never removed."
+                    : "Self-added streamers are removed after " + value + " day" + (value == 1 ? "" : "s") + " without a self-service role.";
+        });
+    }
+
     static void getStreamerList(MorganaBot bot, SlashCommandInteractionEvent event) {
         handle(event, () -> {
             ServerInfo serverInfo = bot.getServerSettings().requireTwitchEnabled(event.getGuild().getIdLong());
@@ -200,7 +287,15 @@ public class TwitchCommandHandler {
                 sb.append("  - Last stream: <t:").append(streamer.stoppedStreaming / 1000L).append(":f>\n");
             }
             if (streamer.channelToPostLiveNotifications != 0L) {
-                sb.append("  - Posts in: <#").append(streamer.channelToPostLiveNotifications).append(">\n");
+                sb.append("  - Posts in: <#").append(streamer.channelToPostLiveNotifications).append(">")
+                        .append(streamer.selfService && streamer.channelOverridePinned ? " (set by an admin)" : "").append("\n");
+            }
+            if (streamer.selfService) {
+                sb.append("  - Self-added");
+                if (streamer.selfServiceLostAt != 0L) {
+                    sb.append(", paused: no self-service role since <t:").append(streamer.selfServiceLostAt / 1000L).append(":f>");
+                }
+                sb.append("\n");
             }
         }
         return sb.toString();
@@ -238,6 +333,14 @@ public class TwitchCommandHandler {
     private static Actor actor(SlashCommandInteractionEvent event) {
         User user = event.getUser();
         return Actor.command(user.getIdLong(), user.getName(), event.getName());
+    }
+
+    /**
+     * The member managing their own entry, for the audit log.
+     */
+    private static Actor selfActor(SlashCommandInteractionEvent event) {
+        User user = event.getUser();
+        return Actor.selfService(user.getIdLong(), user.getName(), event.getName());
     }
 
     private static StreamerRef getStreamerRef(SlashCommandInteractionEvent event) {

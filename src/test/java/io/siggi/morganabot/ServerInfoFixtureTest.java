@@ -17,6 +17,8 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.HashSet;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -28,6 +30,13 @@ import static org.junit.jupiter.api.Assertions.*;
 class ServerInfoFixtureTest {
 
     private static final String FIXTURE = "fixtures/server-v0.json";
+
+    /**
+     * Optional fields added since v0 (step 7). Saving a v0 file writes them with their defaults; nothing else may
+     * appear or disappear.
+     */
+    private static final Set<String> ADDED_SERVER_KEYS = Set.of("selfServiceRoles", "selfServiceRemoveAfterDays");
+    private static final Set<String> ADDED_STREAMER_KEYS = Set.of("selfService", "addedBy", "selfServiceLostAt", "channelOverridePinned");
 
     @TempDir
     Path tempDir;
@@ -77,6 +86,17 @@ class ServerInfoFixtureTest {
         assertNull(c.liveNotificationTemplate);
         assertEquals(0L, c.startedStreaming);
         assertEquals(0L, c.stoppedStreaming);
+
+        // Fields added by step 7 aren't in v0 files: self-service off, 7-day expiry, every streamer admin-added.
+        assertTrue(info.selfServiceRoles().isEmpty());
+        assertEquals(7, info.selfServiceRemoveAfterDays);
+        for (ServerInfo.Streamer streamer : info.streamers) {
+            assertFalse(streamer.selfService);
+            assertEquals(0L, streamer.addedBy);
+            assertEquals(0L, streamer.selfServiceLostAt);
+            assertFalse(streamer.channelOverridePinned);
+            assertFalse(streamer.isSelfServicePaused());
+        }
     }
 
     private static JsonElement parse(File file) throws IOException {
@@ -92,7 +112,11 @@ class ServerInfoFixtureTest {
             assertTrue(actual.isJsonObject(), path + " is not an object");
             JsonObject e = expected.getAsJsonObject();
             JsonObject a = actual.getAsJsonObject();
-            assertEquals(e.keySet(), a.keySet(), path + " keys differ");
+            Set<String> added = new HashSet<>(a.keySet());
+            added.removeAll(e.keySet());
+            Set<String> allowed = path.equals("$") ? ADDED_SERVER_KEYS : path.startsWith("$.streamers[") ? ADDED_STREAMER_KEYS : Set.of();
+            assertTrue(allowed.containsAll(added), path + " has unexpected new keys " + added);
+            assertTrue(a.keySet().containsAll(e.keySet()), path + " lost keys");
             for (String key : e.keySet()) {
                 assertSameJson(path + "." + key, e.get(key), a.get(key));
             }
@@ -137,6 +161,44 @@ class ServerInfoFixtureTest {
 
         ServerInfo reloaded = Data.read(file, ServerInfo.class, new Gson());
         assertFixtureContents(reloaded);
+    }
+
+    @Test
+    void selfServiceFieldsRoundTrip() throws IOException {
+        File file = tempDir.resolve("200.json").toFile();
+        Files.writeString(file.toPath(), """
+                {
+                  "enabledTwitchTracking": true,
+                  "selfServiceRoles": [{"roleId": 1163991005738061976, "channelId": 1400000000000000003}, {"roleId": 1163991005738061977, "channelId": 0}],
+                  "selfServiceRemoveAfterDays": 0,
+                  "streamers": [{"discordId": 200000000000000004, "twitchId": "44444444", "selfService": true,
+                    "addedBy": 200000000000000004, "selfServiceLostAt": 1732000000000, "channelOverridePinned": true}]
+                }
+                """, StandardCharsets.UTF_8);
+        ServerInfo info = Data.read(file, ServerInfo.class, new Gson());
+        assertEquals(2, info.selfServiceRoles.size());
+        assertEquals(1163991005738061976L, info.selfServiceRoles.get(0).roleId);
+        assertEquals(1400000000000000003L, info.selfServiceRoles.get(0).channelId);
+        assertEquals(0L, info.selfServiceRoles.get(1).channelId);
+        assertEquals(0, info.selfServiceRemoveAfterDays);
+        ServerInfo.Streamer s = info.streamers.get(0);
+        assertTrue(s.selfService);
+        assertEquals(200000000000000004L, s.addedBy);
+        assertEquals(1732000000000L, s.selfServiceLostAt);
+        assertTrue(s.channelOverridePinned);
+        assertTrue(s.isSelfServicePaused());
+
+        info.save();
+        ServerInfo reloaded = Data.read(file, ServerInfo.class, new Gson());
+        assertEquals(new Gson().toJson(info), new Gson().toJson(reloaded));
+    }
+
+    @Test
+    void nullSelfServiceRolesIsTreatedAsEmpty() throws IOException {
+        File file = tempDir.resolve("300.json").toFile();
+        Files.writeString(file.toPath(), "{\"selfServiceRoles\": null}", StandardCharsets.UTF_8);
+        ServerInfo info = Data.read(file, ServerInfo.class, new Gson());
+        assertTrue(info.selfServiceRoles().isEmpty());
     }
 
     @Test

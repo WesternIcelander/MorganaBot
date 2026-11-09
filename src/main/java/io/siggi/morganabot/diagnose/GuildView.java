@@ -3,6 +3,7 @@ package io.siggi.morganabot.diagnose;
 import net.dv8tion.jda.api.Permission;
 
 import java.util.EnumSet;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -27,6 +28,14 @@ public interface GuildView {
      * Whether the user is in the server: true, false, or null if it couldn't be checked.
      */
     Boolean isMember(long userId);
+
+    /**
+     * The member's role IDs, highest in Discord's role order first, or null if they're not in the server or it
+     * couldn't be checked.
+     */
+    default List<Long> memberRoles(long userId) {
+        return null;
+    }
 
     enum ChannelKind {
         TEXT, ANNOUNCEMENT, OTHER

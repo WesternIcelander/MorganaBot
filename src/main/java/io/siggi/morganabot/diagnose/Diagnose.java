@@ -4,6 +4,7 @@ import com.google.gson.JsonObject;
 import io.siggi.morganabot.LiveMessage;
 import io.siggi.morganabot.Mentions;
 import io.siggi.morganabot.MorganaBot;
+import io.siggi.morganabot.ServerSettings;
 import io.siggi.morganabot.TwitchStreamerWatcher;
 import io.siggi.morganabot.config.ServerInfo;
 import io.siggi.morganabot.diagnose.Check.Level;
@@ -132,6 +133,8 @@ public class Diagnose {
         List<Check> liveRoleProblems = liveRoleChecks(guild, info.roleForLiveUsers);
         server.addAll(liveRoleProblems);
 
+        server.addAll(selfServiceChecks(guild, info));
+
         if (info.streamers.isEmpty()) {
             server.add(Check.ok("streamers", "No streamers have been added yet."));
         }
@@ -253,6 +256,35 @@ public class Diagnose {
         return checks;
     }
 
+    /**
+     * Each self-service role still exists, and the bot can post in each role's channel. A broken role channel is a
+     * warning here; the streamers posting there get the error.
+     */
+    static List<Check> selfServiceChecks(GuildView guild, ServerInfo info) {
+        List<Check> checks = new ArrayList<>();
+        for (ServerInfo.SelfServiceRole entry : info.selfServiceRoles()) {
+            if (entry == null) continue;
+            RoleView role = guild.role(entry.roleId);
+            if (role == null) {
+                checks.add(Check.warning("selfService.role.exists", "A self-service role (ID " + entry.roleId
+                                + ") doesn't exist any more, so nobody can add themselves through it.",
+                        "Remove it from the self-service roles in the dashboard."));
+                continue;
+            }
+            String name = "@" + role.name();
+            if (entry.channelId == 0L) {
+                checks.add(Check.ok("selfService.role", "Self-service role " + name + " posts in the server's default live channel."));
+                continue;
+            }
+            for (Check check : channelChecks(guild, entry.channelId, "selfService.channel",
+                    "pick another channel for self-service role " + name)) {
+                checks.add(new Check(check.code, check.level == Level.ERROR ? Level.WARNING : check.level,
+                        "Self-service role " + name + ": " + check.message, check.fix));
+            }
+        }
+        return checks;
+    }
+
     private static DiagnoseResult.StreamerResult checkStreamer(GuildView guild, ServerInfo info, ServerInfo.Streamer streamer, String login,
                                                               List<Check> liveRoleProblems, TwitchInfo twitch, long now) {
         List<Check> checks = new ArrayList<>();
@@ -262,6 +294,20 @@ public class Diagnose {
         boolean override = streamer.channelToPostLiveNotifications != 0L;
         long channelId = override ? streamer.channelToPostLiveNotifications : info.channelToPostLiveNotifications;
         String source = override ? "streamer's own channel" : "server default";
+        if (streamer.selfService) {
+            if (streamer.channelOverridePinned) {
+                source = override ? "set by an admin" : "server default, set by an admin";
+            } else if (!streamer.isSelfServicePaused() && streamer.discordId != 0L) {
+                List<Long> roles = guild.memberRoles(streamer.discordId);
+                ServerSettings.SelfServiceChannel resolved = roles == null ? ServerSettings.SelfServiceChannel.NONE
+                        : ServerSettings.resolveSelfServiceChannel(info, roles);
+                if (resolved.eligible()) {
+                    RoleView role = guild.role(resolved.roleId());
+                    String roleName = role == null ? "role " + resolved.roleId() : "role @" + role.name();
+                    source = override ? "from " + roleName : "server default, from " + roleName;
+                }
+            }
+        }
         ChannelView channel = null;
         String channelLabel;
         if (channelId == 0L) {
@@ -332,6 +378,16 @@ public class Diagnose {
             checks.add(Check.error("template.length", "The live message is too long: with a long stream title it's " + filled.length()
                             + " characters, and Discord allows " + LiveMessage.MAX_LENGTH + ".",
                     "Shorten " + templateName + "."));
+        }
+
+        // Paused self-added streamer.
+        if (streamer.isSelfServicePaused()) {
+            int days = info.selfServiceRemoveAfterDays;
+            String removal = days > 0 ? " Their entry is removed on "
+                    + DATE.format(Instant.ofEpochMilli(streamer.selfServiceLostAt + days * 24L * 60L * 60L * 1000L)) + " if that doesn't change." : "";
+            checks.add(0, Check.warning("selfService.paused", "Paused: no self-service role since "
+                            + DATE.format(Instant.ofEpochMilli(streamer.selfServiceLostAt)) + ", so nothing will post when they go live." + removal,
+                    "Give them a self-service role again to resume, or remove them."));
         }
 
         // Twitch subscription status.

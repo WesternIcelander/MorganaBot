@@ -8,6 +8,19 @@ import io.siggi.morganabot.config.ServerInfo;
 import io.siggi.morganabot.config.ServerInfoStore;
 
 import java.io.IOException;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.LongSupplier;
 import java.util.regex.Pattern;
 
 /**
@@ -54,6 +67,61 @@ public class ServerSettings {
         }
     }
 
+    /**
+     * A guild member as self-service sees them.
+     *
+     * @param name              their Discord username, for audit entries
+     * @param present           whether they're in the server; false means they left
+     * @param rolesHighestFirst their role IDs, highest in Discord's role order first (as JDA's
+     *                          {@code Member.getRoles()} returns them)
+     */
+    public record SelfServiceMember(long guildId, long userId, String name, boolean present, List<Long> rolesHighestFirst) {
+        public SelfServiceMember {
+            rolesHighestFirst = rolesHighestFirst == null ? List.of() : List.copyOf(rolesHighestFirst);
+        }
+
+        public static SelfServiceMember absent(long guildId, long userId) {
+            return new SelfServiceMember(guildId, userId, null, false, List.of());
+        }
+    }
+
+    /**
+     * Looks up members for self-service checks. In production it's the JDA member cache (every member is cached).
+     */
+    public interface Members {
+        /**
+         * The member, {@link SelfServiceMember#absent absent} if they're not in the server, or null if that can't be
+         * told right now (e.g. Discord is unavailable).
+         */
+        SelfServiceMember member(long guildId, long userId);
+
+        Members NONE = (guildId, userId) -> null;
+    }
+
+    /**
+     * Which self-service role applies to a member, and the channel it gives.
+     *
+     * @param roleId    the member's highest self-service role, or 0 if they have none (not eligible)
+     * @param channelId that role's channel override, or 0 for the server's default live channel
+     */
+    public record SelfServiceChannel(long roleId, long channelId) {
+        public static final SelfServiceChannel NONE = new SelfServiceChannel(0L, 0L);
+
+        public boolean eligible() {
+            return roleId != 0L;
+        }
+    }
+
+    /**
+     * What {@link #selfSetTwitch} did.
+     *
+     * @param added     a new entry was created (otherwise the member's existing entry was changed)
+     * @param roleId    the self-service role that decided the channel
+     * @param channelId the channel their posts go to, or 0 for the server default
+     */
+    public record SelfSetResult(TwitchUser user, boolean added, long roleId, long channelId) {
+    }
+
     public static class SettingsException extends Exception {
         public SettingsException(String message) {
             super(message);
@@ -66,14 +134,45 @@ public class ServerSettings {
 
     static final String NOT_ENABLED = "This feature is not enabled for this Discord server. Contact <@260595748465278976> if you believe this is a mistake.";
 
+    static final String NO_SELF_SERVICE_ROLE = "You don't have a role that lets you add yourself as a streamer in this server. Ask an admin to add you.";
+
+    /**
+     * How often a member may run {@link #selfSetTwitch} (each call looks up the Twitch account).
+     */
+    static final long SELF_SET_INTERVAL = 60_000L;
+    static final long DAY = 24L * 60L * 60L * 1000L;
+    /**
+     * Upper limit for {@code selfServiceRemoveAfterDays} (about ten years), so the millisecond maths can't overflow.
+     */
+    public static final int MAX_REMOVE_AFTER_DAYS = 3650;
+
+    private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("yyyy-MM-dd").withZone(ZoneOffset.UTC);
+
     private final ServerInfoStore store;
     private final Twitch twitch;
     private final AuditLog auditLog;
+    private volatile Members members = Members.NONE;
+    private LongSupplier clock = System::currentTimeMillis;
+    /**
+     * Last {@link #selfSetTwitch} per "guildId:userId", for the rate limit.
+     */
+    private final Map<String, Long> lastSelfSet = new ConcurrentHashMap<>();
 
     public ServerSettings(ServerInfoStore store, Twitch twitch, AuditLog auditLog) {
         this.store = store;
         this.twitch = twitch;
         this.auditLog = auditLog;
+    }
+
+    /**
+     * Sets where members are looked up for self-service checks (the JDA member cache in production).
+     */
+    public void setMembers(Members members) {
+        this.members = members == null ? Members.NONE : members;
+    }
+
+    void setClock(LongSupplier clock) {
+        this.clock = clock;
     }
 
     /**
@@ -110,6 +209,7 @@ public class ServerSettings {
             }
             ServerInfo.Streamer streamer = new ServerInfo.Streamer(discordUserId, user.id());
             streamer.channelToPostLiveNotifications = channelId;
+            streamer.addedBy = actorUserId(actor);
             serverInfo.streamers.add(streamer);
             audit.streamer = Value.twitch(user.id(), user.login());
             audit.change("twitch", null, Value.twitch(user.id(), user.login()));
@@ -154,6 +254,11 @@ public class ServerSettings {
             audit.streamer = streamerValue(streamer, user);
             audit.change("channel", Value.channel(streamer.channelToPostLiveNotifications), Value.channel(channelId));
             streamer.channelToPostLiveNotifications = channelId;
+            if (streamer.selfService) {
+                // An admin's choice wins over the member's roles, even "server default".
+                audit.change("pinned", Value.bool(streamer.channelOverridePinned), Value.bool(true));
+                streamer.channelOverridePinned = true;
+            }
             return copyOf(streamer);
         });
     }
@@ -264,6 +369,416 @@ public class ServerSettings {
         });
     }
 
+    // --- self-service ---
+
+    /**
+     * The member's highest self-service role (by Discord's role order) and its channel. The highest role wins even if
+     * its channel is empty (server default); lower roles' channels are then ignored.
+     */
+    public static SelfServiceChannel resolveSelfServiceChannel(ServerInfo info, List<Long> rolesHighestFirst) {
+        Map<Long, Long> channels = new HashMap<>();
+        for (ServerInfo.SelfServiceRole role : info.selfServiceRoles()) {
+            if (role != null && role.roleId != 0L) channels.putIfAbsent(role.roleId, role.channelId);
+        }
+        if (channels.isEmpty()) return SelfServiceChannel.NONE;
+        for (Long roleId : rolesHighestFirst) {
+            if (roleId != null && channels.containsKey(roleId)) {
+                return new SelfServiceChannel(roleId, channels.get(roleId));
+            }
+        }
+        return SelfServiceChannel.NONE;
+    }
+
+    /**
+     * {@link #resolveSelfServiceChannel(ServerInfo, List)} with the guild's current settings. A member who isn't in
+     * the server gets {@link SelfServiceChannel#NONE}.
+     */
+    public SelfServiceChannel resolveSelfServiceChannel(SelfServiceMember member) {
+        if (!member.present()) return SelfServiceChannel.NONE;
+        return resolveSelfServiceChannel(store.get(member.guildId()), member.rolesHighestFirst());
+    }
+
+    /**
+     * {@code /settwitchchannel}: the member adds themself as a streamer, or replaces the Twitch account of their
+     * existing entry (whoever added it). Their channel is set from their highest self-service role and no longer
+     * pinned; their own message template is kept. Limited to one call per member per minute.
+     */
+    public SelfSetResult selfSetTwitch(Actor actor, SelfServiceMember member, String twitchName) throws SettingsException, IOException {
+        long guildId = member.guildId();
+        ServerInfo current = requireTwitchEnabled(guildId);
+        if (!member.present() || !resolveSelfServiceChannel(current, member.rolesHighestFirst()).eligible()) {
+            throw new SettingsException(NO_SELF_SERVICE_ROLE);
+        }
+        String login = validateLogin(twitchName);
+        long now = clock.getAsLong();
+        String key = guildId + ":" + member.userId();
+        Long last = lastSelfSet.get(key);
+        if (last != null && now - last < SELF_SET_INTERVAL) {
+            long seconds = Math.max(1L, (SELF_SET_INTERVAL - (now - last) + 999L) / 1000L);
+            throw new SettingsException("You can only do this once a minute. Try again in " + seconds + " second" + (seconds == 1L ? "" : "s") + ".");
+        }
+        lastSelfSet.put(key, now);
+        TwitchUser user = lookUpTwitchUser(login);
+        SelfSetResult result = modify(actor, guildId, AuditEntry.SELF_SERVICE_SET, (serverInfo, audit) -> {
+            SelfServiceChannel resolved = resolveSelfServiceChannel(serverInfo, member.rolesHighestFirst());
+            if (!resolved.eligible()) {
+                throw new SettingsException(NO_SELF_SERVICE_ROLE);
+            }
+            ServerInfo.Streamer own = null;
+            ServerInfo.Streamer sameTwitch = null;
+            for (ServerInfo.Streamer streamer : serverInfo.streamers) {
+                if (own == null && streamer.discordId == member.userId()) own = streamer;
+                if (sameTwitch == null && user.id().equals(streamer.twitchId)) sameTwitch = streamer;
+            }
+            if (sameTwitch != null && sameTwitch != own) {
+                throw new SettingsException("That Twitch account is already added in this server by someone else. If it's yours, ask an admin.");
+            }
+            audit.streamer = Value.twitch(user.id(), user.login());
+            boolean added = own == null;
+            if (added) {
+                own = new ServerInfo.Streamer(member.userId(), user.id());
+                own.selfService = true;
+                own.addedBy = member.userId();
+                own.channelToPostLiveNotifications = resolved.channelId();
+                serverInfo.streamers.add(own);
+                audit.change("twitch", null, Value.twitch(user.id(), user.login()));
+                auditStreamerFields(audit, null, own);
+            } else {
+                if (!user.id().equals(own.twitchId)) {
+                    audit.change("twitch", Value.twitch(own.twitchId, null), Value.twitch(user.id(), user.login()));
+                    own.twitchId = user.id();
+                    // The streaming state belonged to the old account.
+                    own.startedStreaming = 0L;
+                    own.stoppedStreaming = 0L;
+                }
+                audit.change("channel", Value.channel(own.channelToPostLiveNotifications), Value.channel(resolved.channelId()));
+                own.channelToPostLiveNotifications = resolved.channelId();
+                audit.change("pinned", Value.bool(own.channelOverridePinned), Value.bool(false));
+                own.channelOverridePinned = false;
+                audit.change("paused", Value.bool(own.selfServiceLostAt != 0L), Value.bool(false));
+                own.selfServiceLostAt = 0L;
+            }
+            return new SelfSetResult(user, added, resolved.roleId(), resolved.channelId());
+        });
+        twitch.triggerUpdate();
+        return result;
+    }
+
+    /**
+     * {@code /removetwitchchannel}: the member removes their own entry, whether or not they still have a
+     * self-service role, and whoever added it.
+     *
+     * @return a copy of the removed entry
+     */
+    public ServerInfo.Streamer selfRemove(Actor actor, long guildId, long userId) throws SettingsException {
+        requireTwitchEnabled(guildId);
+        if (userId <= 0L) throw new SettingsException("Invalid Discord user.");
+        ServerInfo.Streamer removed = modify(actor, guildId, AuditEntry.SELF_SERVICE_REMOVE, (serverInfo, audit) -> {
+            ServerInfo.Streamer own = null;
+            for (ServerInfo.Streamer streamer : serverInfo.streamers) {
+                if (streamer.discordId == userId) {
+                    own = streamer;
+                    break;
+                }
+            }
+            if (own == null) {
+                throw new SettingsException("You don't have a Twitch channel set in this server.");
+            }
+            serverInfo.streamers.remove(own);
+            audit.streamer = Value.twitch(own.twitchId, null);
+            audit.change("twitch", Value.twitch(own.twitchId, null), null);
+            auditStreamerFields(audit, own, null);
+            return copyOf(own);
+        });
+        twitch.triggerUpdate();
+        return removed;
+    }
+
+    /**
+     * Brings one member's self-added entry in line with their current roles: pauses it if they lost their last
+     * self-service role or left, resumes it if they got one back, and moves an unpinned entry to the channel of
+     * their highest role. Idempotent: if nothing needs to change, nothing is written or audited.
+     *
+     * @return the number of entries changed (0 or 1)
+     */
+    public int reconcileSelfService(SelfServiceMember member) {
+        Map<Long, SelfServiceMember> known = new HashMap<>();
+        known.put(member.userId(), member);
+        return reconcile(member.guildId(), known);
+    }
+
+    /**
+     * {@link #reconcileSelfService(SelfServiceMember)} for every self-added streamer in the guild, with members
+     * looked up through {@link #setMembers Members}. Members that can't be looked up right now are left alone.
+     *
+     * @return the number of entries changed
+     */
+    public int reconcileSelfService(long guildId) {
+        ServerInfo info = store.get(guildId);
+        if (!info.enabledTwitchTracking) return 0;
+        Map<Long, SelfServiceMember> known = new HashMap<>();
+        for (ServerInfo.Streamer streamer : info.streamers) {
+            if (!streamer.selfService || streamer.discordId == 0L || known.containsKey(streamer.discordId)) continue;
+            SelfServiceMember member = members.member(guildId, streamer.discordId);
+            if (member != null) known.put(streamer.discordId, member);
+        }
+        if (known.isEmpty()) return 0;
+        return reconcile(guildId, known);
+    }
+
+    private int reconcile(long guildId, Map<Long, SelfServiceMember> known) {
+        long now = clock.getAsLong();
+        List<AuditEntry> entries = store.modify(guildId, serverInfo -> {
+            List<AuditEntry> changed = new ArrayList<>();
+            // Changes are refused while Twitch is off; the hourly check catches up once it's back on.
+            if (!serverInfo.enabledTwitchTracking) return changed;
+            for (ServerInfo.Streamer streamer : serverInfo.streamers) {
+                if (!streamer.selfService || streamer.discordId == 0L) continue;
+                SelfServiceMember member = known.get(streamer.discordId);
+                if (member == null) continue;
+                SelfServiceChannel resolved = member.present()
+                        ? resolveSelfServiceChannel(serverInfo, member.rolesHighestFirst()) : SelfServiceChannel.NONE;
+                AuditEntry audit;
+                if (!resolved.eligible()) {
+                    if (streamer.selfServiceLostAt != 0L) continue;
+                    audit = new AuditEntry(AuditEntry.SELF_SERVICE_PAUSE);
+                    audit.change("paused", Value.bool(false), Value.bool(true));
+                    audit.note = member.present() ? "No self-service role any more" : "Left the server";
+                    streamer.selfServiceLostAt = now;
+                } else {
+                    boolean resume = streamer.selfServiceLostAt != 0L;
+                    boolean move = !streamer.channelOverridePinned && streamer.channelToPostLiveNotifications != resolved.channelId();
+                    if (!resume && !move) continue;
+                    audit = new AuditEntry(resume ? AuditEntry.SELF_SERVICE_RESUME : AuditEntry.STREAMER_CHANNEL_OVERRIDE);
+                    if (resume) {
+                        audit.change("paused", Value.bool(true), Value.bool(false));
+                        streamer.selfServiceLostAt = 0L;
+                    }
+                    if (move) {
+                        audit.change("channel", Value.channel(streamer.channelToPostLiveNotifications), Value.channel(resolved.channelId()));
+                        audit.subject = Value.role(resolved.roleId());
+                        audit.note = "Channel follows their highest self-service role";
+                        streamer.channelToPostLiveNotifications = resolved.channelId();
+                    }
+                }
+                audit.time = now;
+                audit.streamer = Value.twitch(streamer.twitchId, null);
+                changed.add(audit);
+            }
+            return changed;
+        });
+        for (AuditEntry entry : entries) {
+            auditLog.record(guildId, Actor.system(), entry);
+        }
+        return entries.size();
+    }
+
+    /**
+     * Removes self-added entries that have been without a self-service role for at least
+     * {@code selfServiceRemoveAfterDays} days (never, if that's 0). Doesn't trigger a Twitch sync; the caller does
+     * that if anything was removed.
+     *
+     * @return copies of the removed entries
+     */
+    public List<ServerInfo.Streamer> expireSelfService(long guildId) {
+        long now = clock.getAsLong();
+        record Removed(ServerInfo.Streamer streamer, AuditEntry audit) {
+        }
+        List<Removed> removed = store.modify(guildId, serverInfo -> {
+            List<Removed> list = new ArrayList<>();
+            int days = serverInfo.selfServiceRemoveAfterDays;
+            if (!serverInfo.enabledTwitchTracking || days <= 0) return list;
+            long after = Math.min(days, MAX_REMOVE_AFTER_DAYS) * DAY;
+            for (ServerInfo.Streamer streamer : List.copyOf(serverInfo.streamers)) {
+                if (!streamer.isSelfServicePaused() || now - streamer.selfServiceLostAt < after) continue;
+                serverInfo.streamers.remove(streamer);
+                AuditEntry audit = new AuditEntry(AuditEntry.STREAMER_REMOVE);
+                audit.time = now;
+                audit.streamer = Value.twitch(streamer.twitchId, null);
+                audit.change("twitch", Value.twitch(streamer.twitchId, null), null);
+                auditStreamerFields(audit, streamer, null);
+                audit.note = "Self-added streamer without a self-service role since "
+                        + DATE.format(Instant.ofEpochMilli(streamer.selfServiceLostAt)) + " (removed after " + days + " day" + (days == 1 ? "" : "s") + ")";
+                list.add(new Removed(copyOf(streamer), audit));
+            }
+            return list;
+        });
+        List<ServerInfo.Streamer> result = new ArrayList<>();
+        for (Removed r : removed) {
+            auditLog.record(guildId, Actor.system(), r.audit());
+            result.add(r.streamer());
+        }
+        return result;
+    }
+
+    /**
+     * Adds a self-service role, or changes the channel of one that's already in the list. Afterwards every
+     * self-added streamer is checked against the new list.
+     *
+     * @param channelId the channel for members whose highest self-service role this is, or 0 for the server default
+     */
+    public void addSelfServiceRole(Actor actor, long guildId, long roleId, long channelId) throws SettingsException {
+        requireTwitchEnabled(guildId);
+        if (roleId <= 0L) throw new SettingsException("Invalid role.");
+        validateId(channelId, "channel");
+        if (roleId == guildId) throw new SettingsException("The @everyone role can't be a self-service role.");
+        modify(actor, guildId, AuditEntry.SELF_SERVICE_ROLES, (serverInfo, audit) -> {
+            audit.subject = Value.role(roleId);
+            List<ServerInfo.SelfServiceRole> roles = serverInfo.selfServiceRoles();
+            roles.removeIf(Objects::isNull);
+            ServerInfo.SelfServiceRole existing = null;
+            for (ServerInfo.SelfServiceRole role : roles) {
+                if (role.roleId == roleId) {
+                    existing = role;
+                    break;
+                }
+            }
+            if (existing == null) {
+                roles.add(new ServerInfo.SelfServiceRole(roleId, channelId));
+                audit.change("channel", null, selfServiceChannelValue(channelId));
+            } else {
+                audit.change("channel", selfServiceChannelValue(existing.channelId), selfServiceChannelValue(channelId));
+                existing.channelId = channelId;
+            }
+            return null;
+        });
+        reconcileSelfService(guildId);
+    }
+
+    /**
+     * Removes a role from the self-service list. Members who only had that role are paused.
+     *
+     * @return whether the role was in the list
+     */
+    public boolean removeSelfServiceRole(Actor actor, long guildId, long roleId) throws SettingsException {
+        requireTwitchEnabled(guildId);
+        if (roleId <= 0L) throw new SettingsException("Invalid role.");
+        boolean removed = modify(actor, guildId, AuditEntry.SELF_SERVICE_ROLES, (serverInfo, audit) -> {
+            audit.subject = Value.role(roleId);
+            for (ServerInfo.SelfServiceRole role : List.copyOf(serverInfo.selfServiceRoles())) {
+                if (role != null && role.roleId == roleId) {
+                    serverInfo.selfServiceRoles().remove(role);
+                    audit.change("channel", selfServiceChannelValue(role.channelId), null);
+                    return true;
+                }
+            }
+            return false;
+        });
+        if (removed) reconcileSelfService(guildId);
+        return removed;
+    }
+
+    /**
+     * Replaces the whole self-service role list (for the dashboard). Duplicate roles keep their first channel.
+     */
+    public void setSelfServiceRoles(Actor actor, long guildId, List<ServerInfo.SelfServiceRole> newRoles) throws SettingsException {
+        requireTwitchEnabled(guildId);
+        Map<Long, Long> wanted = new LinkedHashMap<>();
+        for (ServerInfo.SelfServiceRole role : newRoles) {
+            if (role == null || role.roleId <= 0L || role.roleId == guildId) throw new SettingsException("Invalid role.");
+            validateId(role.channelId, "channel");
+            wanted.putIfAbsent(role.roleId, role.channelId);
+        }
+        // One audit entry per role that changed.
+        List<AuditEntry> entries = new ArrayList<>();
+        modify(actor, guildId, AuditEntry.SELF_SERVICE_ROLES, (serverInfo, audit) -> {
+            entries.clear();
+            Map<Long, Long> old = new LinkedHashMap<>();
+            for (ServerInfo.SelfServiceRole role : serverInfo.selfServiceRoles()) {
+                if (role != null) old.putIfAbsent(role.roleId, role.channelId);
+            }
+            Set<Long> all = new LinkedHashSet<>(old.keySet());
+            all.addAll(wanted.keySet());
+            for (long roleId : all) {
+                AuditEntry entry = new AuditEntry(AuditEntry.SELF_SERVICE_ROLES);
+                entry.time = audit.time;
+                entry.subject = Value.role(roleId);
+                entry.change("channel", old.containsKey(roleId) ? selfServiceChannelValue(old.get(roleId)) : null,
+                        wanted.containsKey(roleId) ? selfServiceChannelValue(wanted.get(roleId)) : null);
+                if (entry.hasChanges()) entries.add(entry);
+            }
+            serverInfo.selfServiceRoles = new ArrayList<>();
+            for (Map.Entry<Long, Long> role : wanted.entrySet()) {
+                serverInfo.selfServiceRoles.add(new ServerInfo.SelfServiceRole(role.getKey(), role.getValue()));
+            }
+            return null;
+        });
+        for (AuditEntry entry : entries) {
+            auditLog.record(guildId, actor, entry);
+        }
+        if (!entries.isEmpty()) reconcileSelfService(guildId);
+    }
+
+    /**
+     * Sets how many days a self-added streamer may be without a self-service role before their entry is removed
+     * (0 = never).
+     */
+    public void setSelfServiceRemoveAfterDays(Actor actor, long guildId, int days) throws SettingsException {
+        requireTwitchEnabled(guildId);
+        if (days < 0 || days > MAX_REMOVE_AFTER_DAYS) {
+            throw new SettingsException("The number of days must be between 0 (never) and " + MAX_REMOVE_AFTER_DAYS + ".");
+        }
+        modify(actor, guildId, AuditEntry.SELF_SERVICE_EXPIRY, (serverInfo, audit) -> {
+            audit.change("removeAfterDays", Value.number(serverInfo.selfServiceRemoveAfterDays), Value.number(days));
+            serverInfo.selfServiceRemoveAfterDays = days;
+            return null;
+        });
+    }
+
+    /**
+     * Unpins a self-added streamer's channel, so it follows their roles again, and recalculates it from their
+     * current roles straight away. If they have no self-service role right now, the channel is left as is and
+     * follows their role once they get one back.
+     *
+     * @return a copy of the changed entry
+     */
+    public ServerInfo.Streamer unpinChannel(Actor actor, long guildId, StreamerRef ref) throws SettingsException, IOException {
+        requireTwitchEnabled(guildId);
+        TwitchUser user = resolveTwitchUser(ref);
+        ServerInfo.Streamer found = findStreamer(store.get(guildId), ref, user);
+        if (!found.selfService) {
+            throw new SettingsException("Only self-added streamers can follow their roles. This streamer was added by an admin.");
+        }
+        SelfServiceMember member = found.discordId == 0L ? null : members.member(guildId, found.discordId);
+        if (member == null) {
+            throw new SettingsException("Couldn't look up this streamer's roles right now. Try again in a moment.");
+        }
+        return modify(actor, guildId, AuditEntry.STREAMER_CHANNEL_PIN, (serverInfo, audit) -> {
+            ServerInfo.Streamer streamer = findStreamer(serverInfo, ref, user);
+            if (!streamer.selfService || streamer.discordId != member.userId()) {
+                throw new SettingsException("This streamer changed in the meantime. Try again.");
+            }
+            audit.streamer = streamerValue(streamer, user);
+            audit.change("pinned", Value.bool(streamer.channelOverridePinned), Value.bool(false));
+            streamer.channelOverridePinned = false;
+            SelfServiceChannel resolved = member.present()
+                    ? resolveSelfServiceChannel(serverInfo, member.rolesHighestFirst()) : SelfServiceChannel.NONE;
+            if (resolved.eligible()) {
+                audit.change("channel", Value.channel(streamer.channelToPostLiveNotifications), Value.channel(resolved.channelId()));
+                audit.subject = Value.role(resolved.roleId());
+                streamer.channelToPostLiveNotifications = resolved.channelId();
+                if (streamer.selfServiceLostAt != 0L) {
+                    audit.change("paused", Value.bool(true), Value.bool(false));
+                    streamer.selfServiceLostAt = 0L;
+                }
+            }
+            return copyOf(streamer);
+        });
+    }
+
+    private static Value selfServiceChannelValue(long channelId) {
+        return channelId == 0L ? Value.text("server default") : Value.channel(channelId);
+    }
+
+    private static long actorUserId(Actor actor) {
+        if (actor == null || actor.userId == null) return 0L;
+        try {
+            return Long.parseLong(actor.userId);
+        } catch (NumberFormatException e) {
+            return 0L;
+        }
+    }
+
     /**
      * Records the settings of a streamer entry as old → new: {@code before} null for an added streamer, {@code after}
      * null for a removed one.
@@ -305,7 +820,7 @@ public class ServerSettings {
         }
     }
 
-    private TwitchUser lookUpTwitchUser(String twitchName) throws SettingsException, IOException {
+    private static String validateLogin(String twitchName) throws SettingsException {
         if (twitchName == null || twitchName.isBlank()) {
             throw new SettingsException("You need to specify their Twitch name!");
         }
@@ -313,6 +828,11 @@ public class ServerSettings {
         if (!TWITCH_LOGIN.matcher(login).matches()) {
             throw new SettingsException("\"" + login + "\" isn't a valid Twitch name.");
         }
+        return login;
+    }
+
+    private TwitchUser lookUpTwitchUser(String twitchName) throws SettingsException, IOException {
+        String login = validateLogin(twitchName);
         TwitchUser user = twitch.findUserByLogin(login);
         if (user == null) {
             throw new SettingsException("There's no Twitch user named \"" + login + "\".");

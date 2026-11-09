@@ -169,6 +169,7 @@ public class AuditLog {
 
     private void fillNames(long guildId, AuditEntry entry) {
         fillName(guildId, entry.streamer);
+        fillName(guildId, entry.subject);
         for (AuditEntry.Change change : entry.changes) {
             fillName(guildId, change.oldValue);
             fillName(guildId, change.newValue);
@@ -194,6 +195,7 @@ public class AuditLog {
     private static String describe(AuditEntry entry) {
         StringBuilder sb = new StringBuilder(entry.type);
         if (entry.streamer != null) sb.append(" for streamer ").append(entry.streamer);
+        if (entry.subject != null) sb.append(" for ").append(entry.subject);
         for (AuditEntry.Change change : entry.changes) {
             sb.append("; ").append(change.field).append(": ").append(change.oldValue).append(" -> ").append(change.newValue);
         }

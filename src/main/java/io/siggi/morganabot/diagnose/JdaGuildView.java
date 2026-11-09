@@ -10,7 +10,9 @@ import net.dv8tion.jda.api.entities.channel.middleman.GuildChannel;
 import net.dv8tion.jda.api.exceptions.ErrorResponseException;
 import net.dv8tion.jda.api.requests.ErrorResponse;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -55,6 +57,18 @@ public final class JdaGuildView implements GuildView {
         if (role == null) return null;
         return new RoleView(role.getIdLong(), role.getName(), role.isMentionable(), role.isManaged(), role.isPublicRole(),
                 self.canInteract(role));
+    }
+
+    @Override
+    public List<Long> memberRoles(long userId) {
+        // Every member is cached (members intent), so no REST lookup is needed.
+        Member member = guild.getMemberById(userId);
+        if (member == null) return null;
+        List<Long> roles = new ArrayList<>();
+        for (Role role : member.getRoles()) {
+            roles.add(role.getIdLong());
+        }
+        return roles;
     }
 
     @Override

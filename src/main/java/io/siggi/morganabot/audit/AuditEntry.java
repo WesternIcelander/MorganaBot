@@ -26,6 +26,13 @@ public class AuditEntry {
     public static final String STREAMER_CHANNEL_OVERRIDE = "streamerChannelOverride";
     public static final String STREAMER_DISCORD_USER = "streamerDiscordUser";
     public static final String STREAMER_TEMPLATE = "streamerTemplate";
+    public static final String STREAMER_CHANNEL_PIN = "streamerChannelPin";
+    public static final String SELF_SERVICE_SET = "selfServiceSet";
+    public static final String SELF_SERVICE_REMOVE = "selfServiceRemove";
+    public static final String SELF_SERVICE_PAUSE = "selfServicePause";
+    public static final String SELF_SERVICE_RESUME = "selfServiceResume";
+    public static final String SELF_SERVICE_ROLES = "selfServiceRoles";
+    public static final String SELF_SERVICE_EXPIRY = "selfServiceExpiry";
 
     public static final String VISIBILITY_SERVER = "server";
     public static final String VISIBILITY_SUPER_ADMIN = "superAdmin";
@@ -45,6 +52,10 @@ public class AuditEntry {
      * The streamer the change is about (a {@link Value#TWITCH} value), or null for server-wide settings.
      */
     public Value streamer;
+    /**
+     * What else the change is about, if anything: e.g. the self-service role whose channel changed. Null otherwise.
+     */
+    public Value subject;
     /**
      * What changed, as old → new. Settings that didn't actually change are left out.
      */

@@ -399,6 +399,7 @@ public class TwitchStreamerWatcher {
             try {
                 serverInfo = store.modify(guild.getIdLong(), info -> {
                     for (ServerInfo.Streamer streamer : info.streamers) {
+                        if (skip(streamer, streamerId, goingOnline)) continue;
                         if (streamerId.equals(streamer.twitchId)) {
                             boolean postMessage = true;
                             if (goingOnline) {
@@ -428,11 +429,20 @@ public class TwitchStreamerWatcher {
             if (serverInfo == null) continue;
             int i = 0;
             for (ServerInfo.Streamer streamer : serverInfo.streamers) {
+                if (skip(streamer, streamerId, goingOnline)) continue;
                 if (streamerId.equals(streamer.twitchId)) {
                     handleLiveNotification(jda, guild, serverInfo, streamer, streamerId, streamerName, channelInfo, goingOnline, postMessages.get(i++));
                 }
             }
         }
+    }
+
+    /**
+     * Self-added streamers who lost their self-service role are paused: their go-live is ignored (no post, no live
+     * role, not recorded as a problem). Offline is still handled, so a post from before the pause is cleaned up.
+     */
+    static boolean skip(ServerInfo.Streamer streamer, String streamerId, boolean goingOnline) {
+        return goingOnline && streamerId.equals(streamer.twitchId) && streamer.isSelfServicePaused();
     }
 
     private void handleLiveNotification(JDA jda, Guild guild, ServerInfo serverInfo, ServerInfo.Streamer streamer, String streamerId, String streamerName, JsonObject channelInfo, boolean goingOnline, boolean postMessage) {
@@ -624,6 +634,13 @@ public class TwitchStreamerWatcher {
                 continue;
             }
             long sleep;
+            try {
+                // Catch up on role changes made while the bot was offline, and remove self-added streamers whose
+                // role has been gone too long. The sync below then drops their subscriptions.
+                SelfServiceListener.maintain(bot);
+            } catch (Exception e) {
+                Health.unexpected("Self-service check failed", e);
+            }
             try {
                 ensureSubscriptionToEvents();
                 retryDelay = MIN_SYNC_RETRY;

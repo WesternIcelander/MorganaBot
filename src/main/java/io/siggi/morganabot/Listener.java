@@ -56,6 +56,26 @@ public class Listener extends ListenerAdapter {
                     TwitchCommandHandler.setChannelOverride(bot, event);
                 }
                 break;
+                case "settwitchchannel": {
+                    TwitchCommandHandler.selfSetTwitch(bot, event);
+                }
+                break;
+                case "removetwitchchannel": {
+                    TwitchCommandHandler.selfRemove(bot, event);
+                }
+                break;
+                case "addselfservicerole": {
+                    TwitchCommandHandler.addSelfServiceRole(bot, event);
+                }
+                break;
+                case "removeselfservicerole": {
+                    TwitchCommandHandler.removeSelfServiceRole(bot, event);
+                }
+                break;
+                case "setselfserviceexpiry": {
+                    TwitchCommandHandler.setSelfServiceExpiry(bot, event);
+                }
+                break;
             }
         } catch (Exception e) {
             Health.unexpected("Command /" + event.getName() + " failed", e);

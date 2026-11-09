@@ -35,6 +35,11 @@ import net.dv8tion.jda.api.interactions.IntegrationType;
 import net.dv8tion.jda.api.interactions.commands.DefaultMemberPermissions;
 import net.dv8tion.jda.api.interactions.commands.OptionType;
 import net.dv8tion.jda.api.interactions.commands.build.Commands;
+import net.dv8tion.jda.api.interactions.commands.build.OptionData;
+import net.dv8tion.jda.api.entities.channel.ChannelType;
+import net.dv8tion.jda.api.requests.GatewayIntent;
+import net.dv8tion.jda.api.utils.ChunkingFilter;
+import net.dv8tion.jda.api.utils.MemberCachePolicy;
 
 import java.io.File;
 import java.io.IOException;
@@ -223,6 +228,7 @@ public class MorganaBot {
                 if (watcher != null) watcher.triggerUpdate();
             }
         }, auditLog);
+        serverSettings.setMembers(SelfServiceListener.members(this::getJDA));
         diagnose = new Diagnose(this);
         // The web server and the Twitch watcher don't need Discord to start, and the system status must stay
         // reachable when Discord is down. The watcher's guild loops wait for Discord themselves.
@@ -253,8 +259,13 @@ public class MorganaBot {
             try {
                 systemHealth.setState(Component.DISCORD, State.AMBER, "Connecting",
                         DiscordHealthListener.LONG_DISCONNECT, "Could not connect to Discord for more than 5 minutes");
+                // Self-service follows members' roles as they change, which needs the members intent and every
+                // member cached (JDA only fires role events for cached members). Fine for a bot in < 100 servers.
                 attempt = JDABuilder.createDefault(token)
-                        .addEventListeners(discordHealthListener, new Listener(this))
+                        .enableIntents(GatewayIntent.GUILD_MEMBERS)
+                        .setMemberCachePolicy(MemberCachePolicy.ALL)
+                        .setChunkingFilter(ChunkingFilter.ALL)
+                        .addEventListeners(discordHealthListener, new Listener(this), new SelfServiceListener(this))
                         .build();
                 attempt.awaitReady();
                 if (stopping) {
@@ -338,6 +349,27 @@ public class MorganaBot {
                         .addOption(OptionType.STRING, "twitch-name", "What's their name on Twitch?", false)
                         .addOption(OptionType.USER, "discord-name", "What's their name on Discord?", false)
                         .addOption(OptionType.CHANNEL, "channel", "What channel should we post in? Leave blank to remove the override", false)
+                        .addOption(OptionType.BOOLEAN, "role-based", "Self-added streamers: go back to the channel from their role (don't combine with channel)", false)
+                        .setDefaultPermissions(DefaultMemberPermissions.DISABLED),
+                Commands.slash("settwitchchannel", "Add yourself as a streamer, or change your Twitch channel")
+                        .addOption(OptionType.STRING, "twitch-name", "What's your name on Twitch?", true)
+                        .setContexts(InteractionContextType.GUILD),
+                Commands.slash("removetwitchchannel", "Remove yourself as a streamer")
+                        .setContexts(InteractionContextType.GUILD),
+                Commands.slash("addselfservicerole", "Let members with a role add themselves as streamers")
+                        .addOption(OptionType.ROLE, "role", "Which role may add themselves?", true)
+                        .addOptions(new OptionData(OptionType.CHANNEL, "channel", "Where their live posts go. Leave blank for the default live channel", false)
+                                .setChannelTypes(ChannelType.TEXT, ChannelType.NEWS))
+                        .setContexts(InteractionContextType.GUILD)
+                        .setDefaultPermissions(DefaultMemberPermissions.DISABLED),
+                Commands.slash("removeselfservicerole", "Stop letting members with a role add themselves as streamers")
+                        .addOption(OptionType.ROLE, "role", "Which role?", true)
+                        .setContexts(InteractionContextType.GUILD)
+                        .setDefaultPermissions(DefaultMemberPermissions.DISABLED),
+                Commands.slash("setselfserviceexpiry", "Remove self-added streamers after this many days without a self-service role")
+                        .addOptions(new OptionData(OptionType.INTEGER, "days", "How many days? 0 means never", true)
+                                .setRequiredRange(0, ServerSettings.MAX_REMOVE_AFTER_DAYS))
+                        .setContexts(InteractionContextType.GUILD)
                         .setDefaultPermissions(DefaultMemberPermissions.DISABLED),
                 Commands.slash("streamerlist", "Get a list of streamers in this Discord!")
         ).queue(null, error -> Health.log(Component.DISCORD, Severity.ERROR,
