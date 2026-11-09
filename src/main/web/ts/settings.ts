@@ -1,10 +1,12 @@
 // The "Settings" page for server admins: the Problems panel, live notification settings, the server-wide live
 // message, self-service roles, message permissions and admin roles.
 
-import type { AdminRoles, GuildSummary, LeaveResult, MessageRules, RoleInfo, SelfServiceConfig, Settings } from "./api.js";
+import type { AdminRoles, AutoPublishChannel, GuildSummary, LeaveResult, MessageRules, RoleInfo, SelfServiceConfig, Settings } from "./api.js";
 import {
     badge,
+    channelLabel,
     channelPicker,
+    channelProblemBadge,
     GuildRefs,
     inlineIssues,
     roleLabel,
@@ -56,6 +58,7 @@ async function renderSettingsPage(root: HTMLElement, context: PageContext): Prom
             " Twitch settings can't be changed until it's turned on.") : null,
         panel.element,
         notificationSection(admin, settings),
+        announcementSection(admin, settings),
         serverTemplateSection(admin, settings),
         selfServiceSection(admin, selfService),
         messageRulesSection(admin, rules),
@@ -261,6 +264,75 @@ function notificationSection(admin: AdminContext, initial: Settings): HTMLElemen
             errors.general,
             status);
         replace(section, h("h2", { id: "notifications-title" }, "Live notifications"), form);
+    };
+    draw(initial, "");
+    return section;
+}
+
+// --- announcement channels ---
+
+/** Who posts in an announcement channel, in words. */
+function postersText(entry: AutoPublishChannel): string {
+    const parts: string[] = [];
+    if (entry.defaultChannel) parts.push("the default live channel");
+    const names = entry.streamers.map((s) => s.name ?? "Twitch user " + (s.twitchId ?? "?"));
+    if (names.length > 0) parts.push((names.length === 1 ? "streamer " : "streamers ") + names.join(", "));
+    if (entry.selfServiceRoles.length > 0) {
+        parts.push("self-service " + (entry.selfServiceRoles.length === 1 ? "role " : "roles ") + entry.selfServiceRoles.map((r) => roleLabel(r)).join(", "));
+    }
+    return parts.length === 0 ? "Nobody posts here right now." : "Used by " + parts.join("; ") + ".";
+}
+
+/**
+ * Auto-publish per announcement channel: live alerts posted there can be published to the servers following the
+ * channel. Only channels live alerts can go to are listed. Each toggle saves straight away.
+ */
+function announcementSection(admin: AdminContext, initial: Settings): HTMLElement {
+    const section = h("section", { class: "card", "aria-labelledby": "announcement-title" });
+    const draw = (data: Settings, saved: string): void => {
+        const disabled = admin.twitchOff;
+        const errors = new FormErrors();
+        const status = savedLine(saved);
+        const list = h("ul", { class: "role-list" });
+        const listError = errors.field("autoPublishChannels", list);
+        const rows = data.autoPublishChannels.map((entry) => {
+            const id = uid("auto-publish");
+            const toggle = h("input", { id, type: "checkbox", disabled });
+            toggle.checked = entry.publish;
+            toggle.addEventListener("change", () => {
+                errors.clear();
+                status.textContent = "";
+                const wanted = toggle.checked;
+                toggle.disabled = true;
+                void (async () => {
+                    try {
+                        const next = await api<Settings>("PATCH", guildPath(admin.guild) + "/settings",
+                            { autoPublishChannels: { [entry.channel.id]: wanted } });
+                        draw(next, "Live alerts in " + channelLabel(entry.channel)
+                            + (wanted ? " will be published." : " won't be published."));
+                        void admin.panel.rediagnose();
+                    } catch (error) {
+                        toggle.checked = !wanted;
+                        toggle.disabled = false;
+                        errors.show(error);
+                    }
+                })();
+            });
+            return h("li", null,
+                h("div", { class: "stack" },
+                    h("div", { class: "row" }, h("strong", null, channelLabel(entry.channel)), " ", channelProblemBadge(entry.channel)),
+                    h("div", { class: "checkbox" }, toggle, h("label", { for: id }, "Publish live alerts to servers following this channel")),
+                    h("p", { class: "hint" }, postersText(entry))));
+        });
+        replace(list, rows.length === 0 ? h("li", { class: "muted empty" }, "Live alerts don't go to any announcement channel.") : null, rows);
+        replace(section,
+            h("h2", { id: "announcement-title" }, "Announcement channels"),
+            h("p", { class: "hint" }, "Live alerts posted in an announcement channel can be published, so servers following that channel get them too. "
+                + "Reposts within the notification cooldown are never published."),
+            list,
+            listError,
+            errors.general,
+            status);
     };
     draw(initial, "");
     return section;

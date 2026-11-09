@@ -414,6 +414,24 @@ public class ServerSettings {
     }
 
     /**
+     * Turns auto-publish on or off for an announcement channel: whether live alerts posted there are published to the
+     * servers following it. The caller checks that it's an announcement channel of this server.
+     *
+     * @return whether the value changed
+     */
+    public boolean setAutoPublish(Actor actor, long guildId, long channelId, boolean publish) throws SettingsException {
+        requireTwitchEnabled(guildId);
+        if (channelId <= 0L) throw new SettingsException("Pick an announcement channel.");
+        return modify(actor, guildId, AuditEntry.AUTO_PUBLISH, (serverInfo, audit) -> {
+            boolean old = serverInfo.isAutoPublish(channelId);
+            audit.subject = Value.channel(channelId);
+            audit.change("publish", Value.bool(old), Value.bool(publish));
+            serverInfo.autoPublishChannels().put(channelId, publish);
+            return old != publish;
+        });
+    }
+
+    /**
      * Turns Twitch announcements on or off for a server ({@code enabledTwitchTracking}). Only super admins may do
      * this; the caller checks that. Works whether Twitch is currently on or off.
      *

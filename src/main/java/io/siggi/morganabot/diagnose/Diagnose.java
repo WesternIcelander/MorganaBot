@@ -344,6 +344,7 @@ public class Diagnose {
             List<Check> channelChecks = channelChecks(guild, channelId, "channel", changeFix);
             checks.addAll(channelChecks);
             if (DiagnoseResult.worst(channelChecks) != Level.ERROR) channel = found;
+            if (found != null) checks.addAll(autoPublishChecks(guild, info, found));
         }
 
         // Mentions in the template.
@@ -419,6 +420,29 @@ public class Diagnose {
         }
 
         return new DiagnoseResult.StreamerResult(streamer.twitchId, login, streamer.discordId, channelId, channelLabel, checks);
+    }
+
+    /**
+     * For an announcement channel: whether live alerts posted there are published to the servers following it. If
+     * auto-publish is on and the bot can't send messages there, nothing is published. Nothing for other channels.
+     */
+    static List<Check> autoPublishChecks(GuildView guild, ServerInfo info, ChannelView channel) {
+        List<Check> checks = new ArrayList<>();
+        if (channel.kind() != ChannelKind.ANNOUNCEMENT) return checks;
+        String name = "#" + channel.name();
+        if (!info.isAutoPublish(channel.id())) {
+            checks.add(Check.ok("autoPublish", "Live alerts in " + name + " won't be published (auto-publish off), so servers following it don't get them."));
+            return checks;
+        }
+        if (!channel.botHas(Permission.VIEW_CHANNEL) || !channel.botHas(Permission.MESSAGE_SEND)) {
+            String bot = guild.botName();
+            checks.add(Check.warning("autoPublish.permissions", "Live alerts in " + name + " won't be published to servers following it: "
+                            + bot + " is missing *Send Messages* there.",
+                    "Give " + bot + " *View Channel* and *Send Messages* in " + name + ", or turn auto-publish off for it."));
+            return checks;
+        }
+        checks.add(Check.ok("autoPublish", "Live alerts in " + name + " will be published to servers following it."));
+        return checks;
     }
 
     /**

@@ -29,6 +29,7 @@ import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.entities.Role;
 import net.dv8tion.jda.api.entities.UserSnowflake;
 import net.dv8tion.jda.api.entities.channel.middleman.GuildChannel;
+import net.dv8tion.jda.api.entities.channel.concrete.NewsChannel;
 import net.dv8tion.jda.api.entities.channel.middleman.StandardGuildMessageChannel;
 import net.dv8tion.jda.api.entities.Message;
 import net.dv8tion.jda.api.requests.restaction.MessageCreateAction;
@@ -58,6 +59,7 @@ import java.util.TimeZone;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
@@ -538,6 +540,8 @@ public class TwitchStreamerWatcher {
                         channelInfo.get("game_name").getAsString(), channelInfo.get("title").getAsString(),
                         streamerName, streamerLogin, streamer.discordId);
                 String finalChannelName = channelName;
+                StandardGuildMessageChannel finalChannel = channel;
+                boolean finalSilent = silent;
                 // A later notification for this streamer (e.g. offline) waits until this send and the save of its
                 // message ID are done, so it can delete the new post.
                 CompletableFuture<Void> done = streamerQueue.track(streamerId);
@@ -569,6 +573,9 @@ public class TwitchStreamerWatcher {
                         } finally {
                             done.complete(null);
                         }
+                        if (shouldPublish(serverInfo, finalChannel.getIdLong(), finalChannel instanceof NewsChannel, finalSilent)) {
+                            publishLiveMessage(guildId, message, channelTarget, streamerTarget, finalChannelName);
+                        }
                     }, onFailure);
                 } catch (Exception e) {
                     onFailure.accept(e);
@@ -578,6 +585,39 @@ public class TwitchStreamerWatcher {
             if (serverInfo.deleteNotificationsOnOffline && streamer.lastLiveNotificationId != 0L) {
                 deleteLiveMessage(guildId, channel, channelTarget, channelName, channelProblem, streamerId, streamerTarget, streamer.lastLiveNotificationId);
             }
+        }
+    }
+
+    /**
+     * Whether a live alert just posted in a channel is published to the servers following it: only in announcement
+     * channels with auto-publish on (the default), and never for a silent repost (the cooldown case), so followers
+     * aren't spammed.
+     */
+    static boolean shouldPublish(ServerInfo serverInfo, long channelId, boolean announcementChannel, boolean silent) {
+        return announcementChannel && !silent && serverInfo.isAutoPublish(channelId);
+    }
+
+    /** How long a publish may wait for Discord's rate limit before it counts as failed. */
+    static final long PUBLISH_TIMEOUT_SECONDS = 60L;
+
+    /**
+     * Publishes ("crossposts") a live alert to the servers following its announcement channel. Failures are recorded
+     * in the server's problem log; a post that was deleted in the meantime (stream already over) isn't a problem.
+     */
+    private void publishLiveMessage(long guildId, Message message, Problem.Target channelTarget, Problem.Target streamerTarget, String channelName) {
+        String action = Problem.PUBLISH_LIVE_MESSAGE;
+        Consumer<Throwable> onFailure = error -> {
+            Throwable cause = FailureReasons.unwrap(error);
+            if (cause instanceof ErrorResponseException e && e.getErrorResponse() == ErrorResponse.UNKNOWN_MESSAGE) return;
+            recordProblem(guildId, new Problem(action, channelTarget, streamerTarget,
+                    FailureReasons.describe(error, action, channelName, null)));
+        };
+        try {
+            // Discord only lets a channel publish a few messages an hour. JDA would wait out the limit, possibly for
+            // most of an hour, so give up after a while and report it instead.
+            message.crosspost().timeout(PUBLISH_TIMEOUT_SECONDS, TimeUnit.SECONDS).queue(null, onFailure);
+        } catch (Exception e) {
+            onFailure.accept(e);
         }
     }
 

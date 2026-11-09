@@ -27,6 +27,7 @@ These are only usable by members with Discord's **Administrator** permission by 
 - `/setlivechannel channel:` sets the channel live posts go to.
 - `/setstreamerrole role:` sets a role that's given to streamers while they're live.
 - `/setdeleteonoffline delete:` deletes the live post when the stream ends.
+- `/setautopublish channel: publish:` sets whether live posts in an announcement channel are published, so servers following that channel get them too (see **Announcement channels**).
 - `/setlivemessage message: [discord-name:]` sets the live message, for the whole server or for one streamer. Enter `help` as the message to see the variables: `${game_name}`, `${stream_name}`, `${streamer_name}`, `${twitch_link}` and `${discord_name}`. Use `\n` for a line break.
 - `/addstreamer twitch-name: [discord-name:] [post-in-channel:]` and `/deletestreamer [twitch-name:] [discord-name:]` add and remove streamers.
 - `/setchanneloverride [twitch-name:] [discord-name:] [channel:] [role-based:]` makes one streamer post in a different channel. Leave `channel` blank to remove the override. `role-based: True` puts a self-added streamer back on the channel from their role.
@@ -42,6 +43,10 @@ Everything the commands can change can also be changed in the web dashboard, plu
 - **Diagnose**, which checks every streamer's setup and tells you what would fail on their next go-live (missing permissions, deleted channels or roles, mentions that won't ping), without anyone having to go live.
 - **Problems**, a list of live posts and role changes that actually failed, with the reason.
 - **Audit**, a log of every settings change: who made it, from where (command, dashboard, self-service or the bot's operator), and the old and new value.
+
+### Announcement channels
+
+Live posts can go to announcement channels as well as normal text channels. In an announcement channel, MorganaBot publishes each live post by default, so servers following the channel get it too. Admins can turn this off per channel, with `/setautopublish` or in the dashboard's **Announcement channels** list, which shows every announcement channel live posts can go to and who posts there. Reposts within the notification cooldown are never published. Publishing only needs Send Messages in the channel, but Discord limits how many messages a channel can publish per hour; a publish that fails shows up under **Problems**.
 
 ### Logging in
 

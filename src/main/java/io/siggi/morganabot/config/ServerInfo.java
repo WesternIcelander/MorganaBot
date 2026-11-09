@@ -1,7 +1,9 @@
 package io.siggi.morganabot.config;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 public class ServerInfo extends Data {
 
@@ -34,6 +36,11 @@ public class ServerInfo extends Data {
      * nobody but admins can.
      */
     public List<MessageCustomizationRule> messageCustomizationRules = new ArrayList<>();
+    /**
+     * Per announcement channel (by channel ID): whether live alerts posted there are published to the servers
+     * following it. A channel that's missing means on. Ignored for normal text channels.
+     */
+    public Map<Long, Boolean> autoPublishChannels = new LinkedHashMap<>();
     /**
      * A super admin removed the bot from this server and blocked it: the bot leaves again whenever it's added back
      * (and at startup if it's still in it). Only super admins set or clear this. The rest of the file is kept, so
@@ -85,6 +92,22 @@ public class ServerInfo extends Data {
     public List<MessageCustomizationRule> messageCustomizationRules() {
         if (messageCustomizationRules == null) messageCustomizationRules = new ArrayList<>();
         return messageCustomizationRules;
+    }
+
+    /**
+     * The auto-publish settings, never null.
+     */
+    public Map<Long, Boolean> autoPublishChannels() {
+        if (autoPublishChannels == null) autoPublishChannels = new LinkedHashMap<>();
+        return autoPublishChannels;
+    }
+
+    /**
+     * Whether live alerts in this announcement channel are published to followers: on unless turned off.
+     */
+    public boolean isAutoPublish(long channelId) {
+        Boolean value = autoPublishChannels().get(channelId);
+        return value == null || value;
     }
 
     /**

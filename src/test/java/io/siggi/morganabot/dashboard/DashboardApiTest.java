@@ -681,6 +681,62 @@ class DashboardApiTest {
     }
 
     @Test
+    void autoPublishChannelsReadAndPatch() throws IOException {
+        Login admin = login(ADMIN);
+        assertEquals(0, get(admin, "/guilds/100/settings").json().getAsJsonArray("autoPublishChannels").size(),
+                "no live alerts go to an announcement channel yet");
+        store.modify(GUILD, info -> {
+            info.streamers.get(1).channelToPostLiveNotifications = NEWS;
+            return null;
+        });
+        JsonArray channels = get(admin, "/guilds/100/settings").json().getAsJsonArray("autoPublishChannels");
+        assertEquals(1, channels.size());
+        JsonObject news = channels.get(0).getAsJsonObject();
+        assertEquals("901", news.getAsJsonObject("channel").get("id").getAsString());
+        assertTrue(news.get("publish").getAsBoolean(), "on by default");
+        assertFalse(news.get("defaultChannel").getAsBoolean());
+        assertEquals("BOB", news.getAsJsonArray("streamers").get(0).getAsJsonObject().get("name").getAsString());
+
+        Response off = request("PATCH", admin, "/guilds/100/settings", "{\"autoPublishChannels\": {\"901\": false}}");
+        assertEquals(200, off.code(), off.body());
+        assertFalse(off.json().getAsJsonArray("autoPublishChannels").get(0).getAsJsonObject().get("publish").getAsBoolean());
+        assertFalse(store.get(GUILD).isAutoPublish(NEWS));
+        AuditEntry entry = auditLog.read(GUILD, false).get(0);
+        assertEquals(AuditEntry.AUTO_PUBLISH, entry.type);
+        assertEquals("901", entry.subject.id);
+
+        // Self-service roles' channels are listed too, and the default channel when it's an announcement channel.
+        store.modify(GUILD, info -> {
+            info.channelToPostLiveNotifications = NEWS;
+            info.streamers.get(1).channelToPostLiveNotifications = 0L;
+            return null;
+        });
+        news = get(admin, "/guilds/100/settings").json().getAsJsonArray("autoPublishChannels").get(0).getAsJsonObject();
+        assertTrue(news.get("defaultChannel").getAsBoolean());
+        assertEquals(String.valueOf(STAFF), news.getAsJsonArray("selfServiceRoles").get(0).getAsJsonObject().get("id").getAsString());
+    }
+
+    @Test
+    void autoPublishRejectsChannelsThatArentAnnouncementChannels() throws IOException {
+        Login admin = login(ADMIN);
+        for (String body : new String[]{
+                "{\"autoPublishChannels\": {\"800\": false}}",
+                "{\"autoPublishChannels\": {\"902\": false}}",
+                "{\"autoPublishChannels\": {\"" + OTHER_GUILD_CHANNEL + "\": false}}",
+                "{\"autoPublishChannels\": {\"abc\": false}}",
+                "{\"autoPublishChannels\": {\"901\": \"no\"}}",
+                "{\"autoPublishChannels\": [\"901\"]}",
+                "{\"deleteOnOffline\": true, \"autoPublishChannels\": {\"901\": false, \"800\": false}}"}) {
+            Response r = request("PATCH", admin, "/guilds/100/settings", body);
+            assertEquals(400, r.code(), body);
+            assertEquals("autoPublishChannels", r.field(), body);
+        }
+        assertTrue(store.get(GUILD).autoPublishChannels().isEmpty());
+        assertFalse(store.get(GUILD).deleteNotificationsOnOffline, "nothing is changed when one value is bad");
+        assertTrue(auditLog.read(GUILD, false).isEmpty());
+    }
+
+    @Test
     void twitchOffGivesTwitchDisabled() throws IOException {
         store.modify(GUILD, info -> {
             info.enabledTwitchTracking = false;

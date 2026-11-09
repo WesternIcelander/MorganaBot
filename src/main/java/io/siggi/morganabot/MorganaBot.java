@@ -444,6 +444,12 @@ public class MorganaBot {
                 Commands.slash("setdeleteonoffline", "Set whether or not to delete notifications when a streamer goes offline")
                         .addOption(OptionType.BOOLEAN, "delete", "Should we delete notifications when a streamer goes offline?", true)
                         .setDefaultPermissions(DefaultMemberPermissions.DISABLED),
+                Commands.slash("setautopublish", "Set whether live alerts in an announcement channel are published to servers following it")
+                        .addOptions(new OptionData(OptionType.CHANNEL, "channel", "Which announcement channel?", true)
+                                .setChannelTypes(ChannelType.NEWS))
+                        .addOption(OptionType.BOOLEAN, "publish", "Publish live alerts posted there?", true)
+                        .setContexts(InteractionContextType.GUILD)
+                        .setDefaultPermissions(DefaultMemberPermissions.DISABLED),
                 Commands.slash("setlivemessage", "Set the message to post when a streamer goes live")
                         .addOption(OptionType.STRING, "message", "What message should we post when a streamer goes live? (enter \"help\" to see available variables)", true)
                         .addOption(OptionType.USER, "discord-name", "Override for a specific user?", false)

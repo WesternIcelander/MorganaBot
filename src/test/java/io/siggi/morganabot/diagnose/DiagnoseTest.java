@@ -444,4 +444,41 @@ class DiagnoseTest {
         assertTrue(missingMention.message.contains("999"));
         assertEquals(1, result.server.stream().filter(c -> c.code.equals("messageRule.mentionRole.exists")).count());
     }
+
+    @Test
+    void announcementChannelIsPublishedByDefault() {
+        addStreamer("1", 0L, VIP);
+        Check check = find(checks(run(), "1"), "autoPublish");
+        assertEquals(Level.OK, check.level);
+        assertTrue(check.message.contains("will be published"));
+    }
+
+    @Test
+    void announcementChannelWithAutoPublishOff() {
+        addStreamer("1", 0L, VIP);
+        info.autoPublishChannels().put(VIP, false);
+        Check check = find(checks(run(), "1"), "autoPublish");
+        assertEquals(Level.OK, check.level);
+        assertTrue(check.message.contains("won't be published (auto-publish off)"));
+    }
+
+    @Test
+    void autoPublishWarnsWithoutSendMessages() {
+        addStreamer("1", 0L, VIP);
+        guild.channel(VIP, "vip-live", ChannelKind.ANNOUNCEMENT, EnumSet.of(Permission.VIEW_CHANNEL));
+        Check check = find(checks(run(), "1"), "autoPublish.permissions");
+        assertEquals(Level.WARNING, check.level);
+        assertTrue(check.message.contains("Send Messages"));
+        info.autoPublishChannels().put(VIP, false);
+        assertNull(find(checks(run(), "1"), "autoPublish.permissions"), "nothing to warn about when it's off");
+    }
+
+    @Test
+    void textChannelHasNoAutoPublishCheck() {
+        addStreamer("1", 0L, 0L);
+        info.autoPublishChannels().put(LIVE, false);
+        List<Check> checks = checks(run(), "1");
+        assertNull(find(checks, "autoPublish"));
+        assertNull(find(checks, "autoPublish.permissions"));
+    }
 }

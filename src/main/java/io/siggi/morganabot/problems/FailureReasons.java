@@ -7,6 +7,7 @@ import net.dv8tion.jda.api.requests.ErrorResponse;
 
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeoutException;
 
 /**
  * Turns JDA errors into readable reasons for the problem log.
@@ -39,6 +40,9 @@ public final class FailureReasons {
         if (error instanceof ErrorResponseException e) {
             return describe(e.getErrorResponse(), e.getMeaning(), action, channelName, roleName);
         }
+        if (error instanceof TimeoutException && Problem.PUBLISH_LIVE_MESSAGE.equals(action)) {
+            return publishLimit(channelName);
+        }
         String message = error == null ? null : error.getMessage();
         String type = error == null ? "Unknown error" : error.getClass().getSimpleName();
         return "Unexpected error: " + (message == null || message.isBlank() ? type : message);
@@ -54,6 +58,9 @@ public final class FailureReasons {
         }
         switch (response) {
             case MISSING_PERMISSIONS:
+                if (Problem.PUBLISH_LIVE_MESSAGE.equals(action)) {
+                    return "Missing permission to publish in " + channel(channelName) + " (the bot needs Send Messages there)";
+                }
                 if (Problem.SEND_LIVE_MESSAGE.equals(action)) {
                     return "Missing permission in " + channel(channelName) + " (the bot needs View Channel and Send Messages)";
                 }
@@ -78,10 +85,20 @@ public final class FailureReasons {
                 return "The streamer's linked Discord user isn't in the server";
             case UNKNOWN_ROLE:
                 return "Role " + role(roleName) + " not found (deleted?)";
+            case ALREADY_CROSSPOSTED:
+                return "The live message was already published";
             default:
                 String text = meaning != null && !meaning.isBlank() ? meaning : response.getMeaning();
                 return "Discord error: " + text;
         }
+    }
+
+    /**
+     * Discord limits how many messages a channel can publish per hour; a publish that had to wait too long for that
+     * limit is given up.
+     */
+    static String publishLimit(String channelName) {
+        return "Not published: " + channel(channelName) + " reached Discord's limit on published messages per hour";
     }
 
     public static Throwable unwrap(Throwable error) {
@@ -92,7 +109,8 @@ public final class FailureReasons {
     }
 
     static boolean isChannelAction(String action) {
-        return Problem.SEND_LIVE_MESSAGE.equals(action) || Problem.DELETE_LIVE_MESSAGE.equals(action);
+        return Problem.SEND_LIVE_MESSAGE.equals(action) || Problem.DELETE_LIVE_MESSAGE.equals(action)
+                || Problem.PUBLISH_LIVE_MESSAGE.equals(action);
     }
 
     static boolean isRoleAction(String action) {

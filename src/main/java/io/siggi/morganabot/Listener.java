@@ -48,6 +48,10 @@ public class Listener extends ListenerAdapter {
                     TwitchCommandHandler.setDeleteOnOffline(bot, event);
                 }
                 break;
+                case "setautopublish": {
+                    TwitchCommandHandler.setAutoPublish(bot, event);
+                }
+                break;
                 case "setlivemessage": {
                     TwitchCommandHandler.setLiveMessage(bot, event);
                 }

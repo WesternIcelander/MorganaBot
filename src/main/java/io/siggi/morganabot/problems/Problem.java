@@ -12,6 +12,8 @@ public class Problem {
     public static final String DELETE_LIVE_MESSAGE = "delete-live-message";
     public static final String ADD_LIVE_ROLE = "add-live-role";
     public static final String REMOVE_LIVE_ROLE = "remove-live-role";
+    /** Publishing a live alert to the servers following its announcement channel. */
+    public static final String PUBLISH_LIVE_MESSAGE = "publish-live-message";
 
     /** Unique ID, used to dismiss this entry. */
     public String id;

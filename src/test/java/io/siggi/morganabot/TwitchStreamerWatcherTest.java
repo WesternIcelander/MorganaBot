@@ -79,4 +79,34 @@ class TwitchStreamerWatcherTest {
         info.streamNotificationCooldown = 5000L;
         assertEquals(List.of(false, false), TwitchStreamerWatcher.recordNotification(info, "111", true, 3000L));
     }
+
+    @Test
+    void autoPublishIsOnByDefaultInAnnouncementChannels() {
+        ServerInfo info = new ServerInfo();
+        assertTrue(TwitchStreamerWatcher.shouldPublish(info, 10L, true, false));
+    }
+
+    @Test
+    void silentRepostIsNeverPublished() {
+        ServerInfo info = new ServerInfo();
+        assertFalse(TwitchStreamerWatcher.shouldPublish(info, 10L, true, true));
+        info.autoPublishChannels().put(10L, true);
+        assertFalse(TwitchStreamerWatcher.shouldPublish(info, 10L, true, true));
+    }
+
+    @Test
+    void textChannelIgnoresAutoPublish() {
+        ServerInfo info = new ServerInfo();
+        assertFalse(TwitchStreamerWatcher.shouldPublish(info, 10L, false, false));
+        info.autoPublishChannels().put(10L, true);
+        assertFalse(TwitchStreamerWatcher.shouldPublish(info, 10L, false, false));
+    }
+
+    @Test
+    void autoPublishOffPerChannel() {
+        ServerInfo info = new ServerInfo();
+        info.autoPublishChannels().put(10L, false);
+        assertFalse(TwitchStreamerWatcher.shouldPublish(info, 10L, true, false));
+        assertTrue(TwitchStreamerWatcher.shouldPublish(info, 11L, true, false), "other channels keep the default");
+    }
 }

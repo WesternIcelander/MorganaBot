@@ -712,4 +712,33 @@ class ServerSettingsTest {
         SettingsException e = assertThrows(SettingsException.class, call::run);
         assertEquals(expected, e.getMessage());
     }
+
+    @Test
+    void autoPublishIsAuditedAndDefaultsToOn() throws Exception {
+        assertTrue(store.get(GUILD).isAutoPublish(700L));
+        assertFalse(settings.setAutoPublish(ACTOR, GUILD, 700L, true), "already on by default");
+        assertTrue(audit().isEmpty());
+        assertTrue(settings.setAutoPublish(ACTOR, GUILD, 700L, false));
+        assertFalse(store.get(GUILD).isAutoPublish(700L));
+        assertTrue(store.get(GUILD).isAutoPublish(701L));
+        List<AuditEntry> entries = audit();
+        assertEquals(1, entries.size());
+        AuditEntry entry = entries.get(0);
+        assertEquals(AuditEntry.AUTO_PUBLISH, entry.type);
+        assertEquals(AuditEntry.Value.CHANNEL, entry.subject.kind);
+        assertEquals("700", entry.subject.id);
+        assertEquals("true", change(entry, "publish").oldValue.value);
+        assertEquals("false", change(entry, "publish").newValue.value);
+        assertTrue(settings.setAutoPublish(ACTOR, GUILD, 700L, true));
+        assertTrue(store.get(GUILD).isAutoPublish(700L));
+        assertEquals(2, audit().size());
+    }
+
+    @Test
+    void autoPublishNeedsTwitchAndAChannel() {
+        assertThrows(SettingsException.class, () -> settings.setAutoPublish(ACTOR, GUILD, 0L, false));
+        store.modify(GUILD, info -> info.enabledTwitchTracking = false);
+        assertMessage(settings.notEnabledMessage(), () -> settings.setAutoPublish(ACTOR, GUILD, 700L, false));
+        assertTrue(audit().isEmpty());
+    }
 }

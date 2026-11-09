@@ -340,6 +340,7 @@ public final class DashboardApi {
         result.put("liveChannel", info.channelToPostLiveNotifications == 0L ? null : channelRef(guild, info.channelToPostLiveNotifications));
         result.put("liveRole", info.roleForLiveUsers == 0L ? null : roleRef(guild, info.roleForLiveUsers));
         result.put("deleteOnOffline", info.deleteNotificationsOnOffline);
+        result.put("autoPublishChannels", autoPublishChannels(guild, info));
         result.put("liveMessageTemplate", info.liveNotificationTemplate);
         result.put("defaultLiveMessageTemplate", LiveMessage.DEFAULT_TEMPLATE);
         result.put("notificationCooldownSeconds", (int) Math.min(Integer.MAX_VALUE, Math.max(0L, info.streamNotificationCooldown / 1000L)));
@@ -348,11 +349,95 @@ public final class DashboardApi {
         return result;
     }
 
+    /**
+     * Every announcement channel live alerts can go to (the default live channel, streamers' channels and
+     * self-service role channels), in Discord's channel order, with its auto-publish setting and who posts there.
+     */
+    private List<Map<String, Object>> autoPublishChannels(GuildData guild, ServerInfo info) {
+        Map<Long, List<ServerInfo.Streamer>> streamersByChannel = new LinkedHashMap<>();
+        Map<Long, List<Long>> rolesByChannel = new LinkedHashMap<>();
+        Set<String> twitchIds = new LinkedHashSet<>();
+        if (isAnnouncement(guild, info.channelToPostLiveNotifications)) {
+            streamersByChannel.put(info.channelToPostLiveNotifications, new ArrayList<>());
+        }
+        for (ServerInfo.Streamer streamer : info.streamers) {
+            long channelId = streamer.channelToPostLiveNotifications != 0L ? streamer.channelToPostLiveNotifications
+                    : info.channelToPostLiveNotifications;
+            if (!isAnnouncement(guild, channelId)) continue;
+            streamersByChannel.computeIfAbsent(channelId, k -> new ArrayList<>()).add(streamer);
+            if (streamer.twitchId != null) twitchIds.add(streamer.twitchId);
+        }
+        for (ServerInfo.SelfServiceRole role : info.selfServiceRoles()) {
+            if (role == null) continue;
+            long channelId = role.channelId != 0L ? role.channelId : info.channelToPostLiveNotifications;
+            if (!isAnnouncement(guild, channelId)) continue;
+            streamersByChannel.computeIfAbsent(channelId, k -> new ArrayList<>());
+            rolesByChannel.computeIfAbsent(channelId, k -> new ArrayList<>()).add(role.roleId);
+        }
+        Map<String, TwitchUser> users = twitchIds.isEmpty() ? Map.of() : lookUp(twitchIds);
+        List<Map<String, Object>> list = new ArrayList<>();
+        for (GuildData.ChannelInfo channel : guild.channels()) {
+            List<ServerInfo.Streamer> streamers = streamersByChannel.get(channel.id);
+            if (streamers == null) continue;
+            Map<String, Object> json = new LinkedHashMap<>();
+            json.put("channel", channelRef(guild, channel.id));
+            json.put("publish", info.isAutoPublish(channel.id));
+            json.put("defaultChannel", channel.id == info.channelToPostLiveNotifications);
+            List<Map<String, Object>> names = new ArrayList<>();
+            for (ServerInfo.Streamer streamer : streamers) {
+                TwitchUser user = streamer.twitchId == null ? null : users.get(streamer.twitchId);
+                Map<String, Object> entry = new LinkedHashMap<>();
+                entry.put("twitchId", streamer.twitchId);
+                entry.put("name", user == null ? null : user.displayName());
+                entry.put("discordUserId", streamer.discordId == 0L ? null : streamer.discordId);
+                names.add(entry);
+            }
+            json.put("streamers", names);
+            List<Map<String, Object>> roles = new ArrayList<>();
+            for (long roleId : rolesByChannel.getOrDefault(channel.id, List.of())) roles.add(roleRef(guild, roleId));
+            json.put("selfServiceRoles", roles);
+            list.add(json);
+        }
+        return list;
+    }
+
+    private static boolean isAnnouncement(GuildData guild, long channelId) {
+        if (channelId == 0L) return false;
+        GuildData.ChannelInfo channel = guild.channel(channelId);
+        return channel != null && GuildData.ChannelInfo.ANNOUNCEMENT.equals(channel.type);
+    }
+
+    /**
+     * {@code {"<channelId>": true/false}}: each channel must be an announcement channel of this server.
+     */
+    private static Map<Long, Boolean> autoPublishChanges(GuildData guild, JsonElement element) throws ApiError {
+        String field = "autoPublishChannels";
+        if (element == null || !element.isJsonObject()) {
+            throw ApiError.invalid(field, "autoPublishChannels must map channel IDs to true or false.");
+        }
+        Map<Long, Boolean> changes = new LinkedHashMap<>();
+        for (Map.Entry<String, JsonElement> entry : element.getAsJsonObject().entrySet()) {
+            long channelId = id(new JsonPrimitive(entry.getKey()), field);
+            if (channelId == 0L) throw ApiError.invalid(field, "Invalid ID.");
+            if (!isAnnouncement(guild, channelId)) {
+                throw ApiError.invalid(field, guild.channel(channelId) != null
+                        ? "Only announcement channels can publish live alerts."
+                        : guild.hasChannel(channelId) ? "That channel isn't an announcement channel." : "That channel isn't in this server.");
+            }
+            JsonElement value = entry.getValue();
+            if (value == null || !value.isJsonPrimitive() || !value.getAsJsonPrimitive().isBoolean()) {
+                throw ApiError.invalid(field, "Auto-publish must be true or false.");
+            }
+            changes.put(channelId, value.getAsBoolean());
+        }
+        return changes;
+    }
+
     Object patchSettings(ApiRequest r) throws Exception {
         GuildData guild = guild(r);
         JsonObject body = r.body(JsonObject.class);
         allowOnly(body, "liveChannelId", "liveRoleId", "deleteOnOffline", "liveMessageTemplate",
-                "notificationCooldownSeconds", "enabledTwitchTracking");
+                "notificationCooldownSeconds", "autoPublishChannels", "enabledTwitchTracking");
         Boolean twitchTracking = null;
         if (body.has("enabledTwitchTracking")) {
             if (!r.isSuperAdmin()) throw new ApiError(403, "forbidden", "Only bot admins can change this.", "enabledTwitchTracking");
@@ -375,6 +460,7 @@ public final class DashboardApi {
             }
         }
         Boolean delete = body.has("deleteOnOffline") ? bool(body, "deleteOnOffline", "deleteOnOffline") : null;
+        Map<Long, Boolean> autoPublish = body.has("autoPublishChannels") ? autoPublishChanges(guild, body.get("autoPublishChannels")) : Map.of();
         if (body.has("notificationCooldownSeconds")) {
             cooldown = integer(body, "notificationCooldownSeconds");
             if (cooldown < 0 || cooldown > MAX_COOLDOWN_SECONDS) {
@@ -399,6 +485,11 @@ public final class DashboardApi {
         if (delete != null) {
             boolean value = delete;
             run(() -> settings.setDeleteOnOffline(actor, guildId, value), "deleteOnOffline");
+        }
+        for (Map.Entry<Long, Boolean> entry : autoPublish.entrySet()) {
+            long id = entry.getKey();
+            boolean publish = entry.getValue();
+            run(() -> settings.setAutoPublish(actor, guildId, id, publish), "autoPublishChannels");
         }
         if (cooldown != null) {
             long millis = cooldown * 1000L;

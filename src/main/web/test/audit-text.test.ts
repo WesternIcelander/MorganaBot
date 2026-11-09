@@ -54,6 +54,9 @@ test("changes as one line", () => {
 test("type labels fall back to the raw type", () => {
     assert.equal(typeLabel("liveChannel"), "Live channel");
     assert.equal(typeLabel("serverLeave"), "serverLeave");
+    assert.equal(typeLabel("autoPublish"), "Auto-publish");
+    assert.equal(changeText({ field: "publish", old: { kind: "boolean", value: "true" }, new: { kind: "boolean", value: "false" } }, "autoPublish"),
+        "Publish to following servers: on → off");
 });
 
 test("actorsOf lists each person once, without the bot", () => {

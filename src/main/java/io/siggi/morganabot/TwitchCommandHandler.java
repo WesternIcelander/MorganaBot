@@ -10,9 +10,12 @@ import io.siggi.morganabot.diagnose.Diagnose;
 import io.siggi.morganabot.diagnose.JdaGuildView;
 import io.siggi.morganabot.health.Health;
 import io.siggi.morganabot.util.Util;
+import net.dv8tion.jda.api.Permission;
 import net.dv8tion.jda.api.entities.Member;
 import net.dv8tion.jda.api.entities.Role;
 import net.dv8tion.jda.api.entities.User;
+import net.dv8tion.jda.api.entities.channel.concrete.NewsChannel;
+import net.dv8tion.jda.api.entities.channel.middleman.GuildChannel;
 import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent;
 import net.dv8tion.jda.api.interactions.commands.OptionMapping;
 
@@ -139,6 +142,31 @@ public class TwitchCommandHandler {
             boolean delete = deleteMapping.getAsBoolean();
             bot.getServerSettings().setDeleteOnOffline(actor(event), event.getGuild().getIdLong(), delete);
             return "Set delete notifications on offline: " + delete;
+        });
+    }
+
+    static void setAutoPublish(MorganaBot bot, SlashCommandInteractionEvent event) {
+        handle(event, () -> {
+            OptionMapping channelMapping = event.getOption("channel");
+            OptionMapping publishMapping = event.getOption("publish");
+            if (channelMapping == null || publishMapping == null) {
+                return "You need to choose an announcement channel and whether to publish!";
+            }
+            GuildChannel channel = channelMapping.getAsChannel();
+            if (!(channel instanceof NewsChannel) || channel.getGuild().getIdLong() != event.getGuild().getIdLong()) {
+                return "<#" + channel.getIdLong() + "> isn't an announcement channel. Only live alerts in announcement channels can be published.";
+            }
+            boolean publish = publishMapping.getAsBoolean();
+            bot.getServerSettings().setAutoPublish(actor(event), event.getGuild().getIdLong(), channel.getIdLong(), publish);
+            if (!publish) {
+                return "Live alerts in <#" + channel.getIdLong() + "> will no longer be published to servers following it.";
+            }
+            String reply = "Live alerts in <#" + channel.getIdLong() + "> will be published to servers following it.";
+            if (!event.getGuild().getSelfMember().hasPermission(channel, Permission.VIEW_CHANNEL, Permission.MESSAGE_SEND)) {
+                reply += "\n\n**Warning:** " + event.getGuild().getSelfMember().getEffectiveName()
+                        + " is missing *View Channel* or *Send Messages* there, so it can't post or publish.";
+            }
+            return reply;
         });
     }
 

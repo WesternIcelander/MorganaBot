@@ -87,4 +87,16 @@ class FailureReasonsTest {
         assertEquals("Unexpected error: IllegalStateException",
                 FailureReasons.describe(new IllegalStateException(), Problem.SEND_LIVE_MESSAGE, "live", null));
     }
+
+    @Test
+    void publishFailures() {
+        assertEquals("Missing permission to publish in #news (the bot needs Send Messages there)",
+                FailureReasons.describe(ErrorResponse.MISSING_PERMISSIONS, null, Problem.PUBLISH_LIVE_MESSAGE, "news", null));
+        assertEquals("The bot can't see #news (missing View Channel)",
+                FailureReasons.describe(ErrorResponse.MISSING_ACCESS, null, Problem.PUBLISH_LIVE_MESSAGE, "news", null));
+        assertEquals("Not published: #news reached Discord's limit on published messages per hour",
+                FailureReasons.describe(new java.util.concurrent.TimeoutException(), Problem.PUBLISH_LIVE_MESSAGE, "news", null));
+        assertEquals("The live message was already published",
+                FailureReasons.describe(ErrorResponse.ALREADY_CROSSPOSTED, null, Problem.PUBLISH_LIVE_MESSAGE, "news", null));
+    }
 }

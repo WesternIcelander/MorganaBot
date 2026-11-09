@@ -153,12 +153,26 @@ export interface Settings {
     liveChannel: ChannelRef | null;
     liveRole: RoleRef | null;
     deleteOnOffline: boolean;
+    /** Every announcement channel live alerts can go to, in Discord's order. */
+    autoPublishChannels: AutoPublishChannel[];
     /** Null: the default message is used. */
     liveMessageTemplate: string | null;
     defaultLiveMessageTemplate: string;
     notificationCooldownSeconds: number;
     variables: string[];
     maxLength: number;
+}
+
+/** An announcement channel live alerts can go to, and whether they're published to servers following it. */
+export interface AutoPublishChannel {
+    channel: ChannelRef;
+    publish: boolean;
+    /** It's the server's default live channel. */
+    defaultChannel: boolean;
+    /** Streamers whose live alerts go there. `name` is null if Twitch couldn't be asked. */
+    streamers: { twitchId: string | null; name: string | null; discordUserId: Id | null }[];
+    /** Self-service roles whose members' alerts go there. */
+    selfServiceRoles: RoleRef[];
 }
 
 /** `GET …/admin-roles` */

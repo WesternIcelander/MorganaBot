@@ -72,6 +72,7 @@ const ACTIONS: Record<string, string> = {
     "delete-live-message": "Deleting a live message",
     "add-live-role": "Giving the live role",
     "remove-live-role": "Taking away the live role",
+    "publish-live-message": "Publishing a live message to following servers",
 };
 
 /** What the bot was trying to do, in words. */

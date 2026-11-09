@@ -38,7 +38,7 @@ class ServerInfoFixtureTest {
      */
     private static final Set<String> ADDED_SERVER_KEYS = Set.of("selfServiceRoles", "selfServiceRemoveAfterDays",
             "adminRoles", "messageCustomizationRules", "blocked", "blockedAt", "blockedBy", "blockedByName", "blockedReason",
-            "blockedName");
+            "blockedName", "autoPublishChannels");
     private static final Set<String> ADDED_STREAMER_KEYS = Set.of("selfService", "addedBy", "selfServiceLostAt", "channelOverridePinned",
             "templateSetBy");
 
@@ -111,6 +111,40 @@ class ServerInfoFixtureTest {
         assertNull(info.blockedByName);
         assertNull(info.blockedReason);
         assertNull(info.blockedName);
+        // Step 19: no auto-publish entries, so every announcement channel publishes (what production did before).
+        assertTrue(info.autoPublishChannels().isEmpty());
+        assertTrue(info.isAutoPublish(info.channelToPostLiveNotifications));
+        assertTrue(info.isAutoPublish(1400000000000000002L));
+    }
+
+    @Test
+    void autoPublishRoundTrip() throws IOException {
+        File file = tempDir.resolve("publish.json").toFile();
+        Files.writeString(file.toPath(), """
+                {
+                  "enabledTwitchTracking": true,
+                  "autoPublishChannels": {"1532050821162860574": false, "1400000000000000002": true}
+                }
+                """, StandardCharsets.UTF_8);
+        ServerInfo info = Data.read(file, ServerInfo.class, new Gson());
+        assertFalse(info.isAutoPublish(1532050821162860574L));
+        assertTrue(info.isAutoPublish(1400000000000000002L));
+        assertTrue(info.isAutoPublish(1500000000000000003L), "a missing channel means on");
+        info.autoPublishChannels().put(1500000000000000003L, false);
+        info.save();
+        ServerInfo again = Data.read(file, ServerInfo.class, new Gson());
+        assertFalse(again.isAutoPublish(1532050821162860574L));
+        assertFalse(again.isAutoPublish(1500000000000000003L));
+        assertTrue(again.isAutoPublish(1400000000000000002L));
+        assertTrue(parse(file).getAsJsonObject().getAsJsonObject("autoPublishChannels").has("1500000000000000003"));
+    }
+
+    @Test
+    void nullAutoPublishMeansOn() throws IOException {
+        File file = tempDir.resolve("null-publish.json").toFile();
+        Files.writeString(file.toPath(), "{\"autoPublishChannels\": null}", StandardCharsets.UTF_8);
+        ServerInfo info = Data.read(file, ServerInfo.class, new Gson());
+        assertTrue(info.isAutoPublish(5L));
     }
 
     @Test

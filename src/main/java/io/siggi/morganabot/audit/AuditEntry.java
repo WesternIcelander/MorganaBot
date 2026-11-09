@@ -19,6 +19,8 @@ public class AuditEntry {
     public static final String LIVE_CHANNEL = "liveChannel";
     public static final String LIVE_ROLE = "liveRole";
     public static final String DELETE_ON_OFFLINE = "deleteOnOffline";
+    /** Auto-publish turned on or off for an announcement channel (subject: the channel, change {@code publish}). */
+    public static final String AUTO_PUBLISH = "autoPublish";
     public static final String NOTIFICATION_COOLDOWN = "notificationCooldown";
     public static final String SERVER_TEMPLATE = "serverTemplate";
     public static final String STREAMER_ADD = "streamerAdd";
