@@ -16,6 +16,7 @@ import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.entities.Message;
 import net.dv8tion.jda.api.entities.Role;
 import net.dv8tion.jda.api.entities.UserSnowflake;
+import net.dv8tion.jda.api.entities.channel.concrete.NewsChannel;
 import net.dv8tion.jda.api.entities.channel.middleman.StandardGuildMessageChannel;
 import net.dv8tion.jda.api.entities.channel.middleman.GuildChannel;
 
@@ -256,9 +257,14 @@ public class TwitchStreamerWatcher {
                             .replace("${streamer_name}", streamerNameEscaped)
                             .replace("${twitch_link}", "https://www.twitch.tv/" + streamerName)
                             .replace("${discord_name}", discordMention);
+                    boolean silentFinal = silent;
                     textChannel.sendMessage(liveMessage).setSuppressedNotifications(silent).submit(true).thenAccept((message) -> {
                         streamer.lastLiveNotificationId = message.getIdLong();
                         serverInfo.save();
+                        if (!silentFinal && message.getChannel() instanceof NewsChannel) {
+                            // Publish to servers following this announcement channel
+                            message.crosspost().queue(null, Throwable::printStackTrace);
+                        }
                     });
             }
         } else {
