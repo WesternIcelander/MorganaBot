@@ -353,9 +353,12 @@ public final class DashboardApi {
         JsonObject body = r.body(JsonObject.class);
         allowOnly(body, "liveChannelId", "liveRoleId", "deleteOnOffline", "liveMessageTemplate",
                 "notificationCooldownSeconds", "enabledTwitchTracking");
+        Boolean twitchTracking = null;
         if (body.has("enabledTwitchTracking")) {
             if (!r.isSuperAdmin()) throw new ApiError(403, "forbidden", "Only bot admins can change this.", "enabledTwitchTracking");
-            throw ApiError.invalid("enabledTwitchTracking", "Turning Twitch on or off from the dashboard isn't available yet.");
+            JsonElement value = body.get("enabledTwitchTracking");
+            if (value == null || value.isJsonNull()) throw ApiError.invalid("enabledTwitchTracking", "enabledTwitchTracking must be true or false.");
+            twitchTracking = bool(body, "enabledTwitchTracking", "enabledTwitchTracking");
         }
         // Check everything first, so a bad value changes nothing.
         Long channelId = null, roleId = null;
@@ -381,6 +384,10 @@ public final class DashboardApi {
         String template = body.has("liveMessageTemplate") ? string(body, "liveMessageTemplate") : null;
         Actor actor = actor(r);
         long guildId = r.guildId();
+        // Turning Twitch on goes first and turning it off goes last, so the other values in the same request apply.
+        if (Boolean.TRUE.equals(twitchTracking)) {
+            run(() -> settings.setTwitchTracking(actor, guildId, true), "enabledTwitchTracking");
+        }
         if (channelId != null) {
             long id = channelId;
             run(() -> settings.setLiveChannel(actor, guildId, id), "liveChannelId");
@@ -399,6 +406,9 @@ public final class DashboardApi {
         }
         if (body.has("liveMessageTemplate")) {
             run(() -> settings.setServerTemplate(actor, guildId, template), "liveMessageTemplate");
+        }
+        if (Boolean.FALSE.equals(twitchTracking)) {
+            run(() -> settings.setTwitchTracking(actor, guildId, false), "enabledTwitchTracking");
         }
         return getSettings(r);
     }

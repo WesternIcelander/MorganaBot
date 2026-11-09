@@ -2,10 +2,12 @@ package io.siggi.morganabot;
 
 import io.siggi.morganabot.config.Configuration;
 import com.google.gson.JsonObject;
+import io.siggi.morganabot.dashboard.AdminApi;
 import io.siggi.morganabot.dashboard.ApiRouter;
 import io.siggi.morganabot.dashboard.DashboardApi;
 import io.siggi.morganabot.dashboard.JdaGuildData;
 import io.siggi.morganabot.dashboard.DashboardSession;
+import io.siggi.morganabot.dashboard.GuildData;
 import io.siggi.morganabot.dashboard.GuildResolver;
 import io.siggi.morganabot.dashboard.LoginEndpoints;
 import io.siggi.morganabot.dashboard.StaticFiles;
@@ -61,9 +63,10 @@ public class WebHandler {
         // login and logout, then the API router (/dashboard/api/…), then static files (/dashboard/…).
         new LoginEndpoints(bot.getLoginTokens()).register(httpServer);
         api = new ApiRouter(bot.getAccess(), GuildResolver.jda(bot::getJDA), System::currentTimeMillis);
+        GuildData.Provider guilds = JdaGuildData.provider(bot::getJDA, bot::getDiagnose);
         new DashboardApi(bot.getServerInfoStore(), bot.getServerSettings(), bot.getAccess(), bot.getAuditLog(),
-                bot.getServerProblems(), JdaGuildData.provider(bot::getJDA, bot::getDiagnose), this::twitchUsers,
-                this::twitchTrouble).register(api);
+                bot.getServerProblems(), guilds, this::twitchUsers, this::twitchTrouble).register(api);
+        new AdminApi(bot.getServerInfoStore(), bot.getServerProblems(), guilds, bot::getSystemHealth).register(api);
         api.register(httpServer);
         new StaticFiles(WebHandler.class.getClassLoader(), "web").register(httpServer);
         (thread = new Thread(() -> {

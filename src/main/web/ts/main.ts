@@ -1,7 +1,8 @@
 // The dashboard shell: who's logged in (GET /me), the server dropdown, the page tabs, logout, and the
-// "run /dashboard again" notice when the session has expired.
+// "run /dashboard again" notice when the session has expired. Super admin sessions get the sidebar (System page and
+// server switcher) instead of the dropdown.
 
-import type { GuildSummary, Me } from "./api.js";
+import type { AdminGuild, GuildSummary, Me } from "./api.js";
 import { busy, errorMessage, h, replace } from "./dom.js";
 import { api, ApiFailure, setCsrfToken, setSessionExpiredHandler } from "./http.js";
 import type { Page, PageContext } from "./page.js";
@@ -9,6 +10,8 @@ import { auditPage } from "./audit.js";
 import { settingsPage } from "./settings.js";
 import { streamersPage } from "./streamers.js";
 import { streamPage } from "./stream.js";
+import { Sidebar } from "./sidebar.js";
+import { renderSystemPage } from "./system.js";
 
 /** Every page, in tab order. A server opens on the first page it offers (admins: Settings, streamers: My stream). */
 const PAGES: Page[] = [settingsPage, streamersPage, auditPage, streamPage];
@@ -25,6 +28,9 @@ let me: Me | null = null;
 let current: GuildSummary | null = null;
 /** The page from the URL or the tabs; null for the server's default page. */
 let currentPage: string | null = null;
+/** "system" while the super admin System page is open (no server selected). */
+let view: "system" | null = null;
+let sidebar: Sidebar | null = null;
 /** Bumped on every navigation, so a slow page load can't draw over a newer one. */
 let generation = 0;
 
@@ -49,6 +55,7 @@ function showBanner(kind: "error" | "warn" | "info", ...text: string[]): void {
 
 function sessionExpired(): void {
     showBanner("error", "Your session has expired.", LOGIN_HELP);
+    sidebar?.hide();
     replace(account());
     replace(serverPicker());
     replace(nav());
@@ -72,10 +79,18 @@ function pageFromUrl(): string | null {
     return new URLSearchParams(window.location.search).get("page");
 }
 
+function viewFromUrl(): "system" | null {
+    return new URLSearchParams(window.location.search).get("view") === "system" ? "system" : null;
+}
+
 function writeUrl(push: boolean): void {
     const params = new URLSearchParams();
-    if (current !== null) params.set("guild", current.id);
-    if (currentPage !== null && currentPage !== defaultPage(current)) params.set("page", currentPage);
+    if (view === "system") {
+        params.set("view", "system");
+    } else {
+        if (current !== null) params.set("guild", current.id);
+        if (currentPage !== null && currentPage !== defaultPage(current)) params.set("page", currentPage);
+    }
     const query = params.toString();
     const url = window.location.pathname + (query.length > 0 ? "?" + query : "");
     if (push) window.history.pushState(null, "", url);
@@ -96,6 +111,7 @@ function drawAccount(user: Me): void {
             }
             me = null;
             setCsrfToken(null);
+            sidebar?.hide();
             replace(account());
             replace(serverPicker());
             banner().hidden = true;
@@ -110,6 +126,13 @@ function drawAccount(user: Me): void {
 
 function drawServerPicker(user: Me): void {
     const picker = serverPicker();
+    if (user.superAdmin) {
+        // The sidebar is the switcher; the header only names what's open.
+        const name = current === null ? null : sidebar?.guild(current.id)?.name ?? current.name;
+        replace(picker, view === "system" ? h("span", { class: "server-name" }, "System")
+            : name !== null ? h("span", { class: "server-name" }, name) : null);
+        return;
+    }
     if (user.guilds.length <= 1) {
         replace(picker, current !== null ? h("span", { class: "server-name" }, current.name) : null);
         return;
@@ -151,8 +174,14 @@ function drawNav(guild: GuildSummary): void {
 }
 
 async function openPage(): Promise<void> {
-    if (me === null || current === null) return;
+    if (me === null) return;
+    if (view === "system") {
+        await openSystem();
+        return;
+    }
+    if (current === null) return;
     const guild = current;
+    sidebar?.select({ kind: "guild", id: guild.id });
     const pages = PAGES.filter((page) => page.available(guild));
     const page = pages.find((p) => p.id === currentPage) ?? pages[0]!;
     if (currentPage !== null && currentPage !== page.id) {
@@ -165,7 +194,7 @@ async function openPage(): Promise<void> {
     const run = ++generation;
     const root = h("div", { class: "page" }, h("p", { class: "loading" }, "Loading…"));
     replace(content(), root);
-    const context: PageContext = { me, guild, accessChanged: reloadMe };
+    const context: PageContext = { me, guild, accessChanged: reloadMe, serverChanged: () => void sidebar?.loadGuilds() };
     try {
         await page.render(root, context);
     } catch (error) {
@@ -181,6 +210,61 @@ async function openPage(): Promise<void> {
             replace(root, h("div", { class: "notice error" }, h("p", null, errorMessage(error)), retry));
         }
     }
+}
+
+/** The super admin System page. */
+async function openSystem(): Promise<void> {
+    if (me === null) return;
+    view = "system";
+    sidebar?.select({ kind: "system" });
+    drawServerPicker(me);
+    replace(nav());
+    const run = ++generation;
+    const root = h("div", { class: "page" }, h("p", { class: "loading" }, "Loading…"));
+    replace(content(), root);
+    try {
+        await renderSystemPage(root, (status) => sidebar?.setStatus(status));
+    } catch (error) {
+        if (run !== generation) return;
+        if (error instanceof ApiFailure && error.sessionExpired) return;
+        const retry = h("button", { type: "button" }, "Try again");
+        retry.addEventListener("click", () => void openSystem());
+        replace(root, h("div", { class: "notice error" }, h("p", null, errorMessage(error)), retry));
+    }
+}
+
+/** A server picked in the sidebar. Super admins can open every server, even one /me didn't list yet. */
+function openFromSidebar(guild: AdminGuild): void {
+    if (me === null) return;
+    view = null;
+    current = me.guilds.find((g) => g.id === guild.id) ?? { id: guild.id, name: guild.name, iconUrl: guild.iconUrl, access: "admin" };
+    currentPage = null;
+    writeUrl(true);
+    void openPage();
+}
+
+/** Sets up the sidebar for a super admin session (once), or hides it. */
+function setUpSidebar(user: Me): void {
+    if (!user.superAdmin) {
+        sidebar?.hide();
+        return;
+    }
+    if (sidebar === null) {
+        sidebar = new Sidebar(el("sidebar"), {
+            openSystem: () => {
+                view = "system";
+                writeUrl(true);
+                void openSystem();
+            },
+            openGuild: openFromSidebar,
+        });
+    }
+    sidebar.show();
+    sidebar.startPolling();
+    void sidebar.loadGuilds().then(() => {
+        // Names a server opened by ID before the list was loaded.
+        if (me !== null) drawServerPicker(me);
+    });
 }
 
 /** Loads /me and opens the server from the URL (or the first one). */
@@ -203,13 +287,28 @@ async function reloadMe(): Promise<void> {
     me = user;
     setCsrfToken(user.csrfToken);
     drawAccount(user);
+    setUpSidebar(user);
     if (!user.discordAvailable) {
         showBanner("warn", "Discord is unavailable right now, so server pages may not load.");
     } else {
         banner().hidden = true;
     }
+    if (!user.superAdmin && view === "system") view = null;
     const wanted = current?.id ?? guildFromUrl();
-    current = user.guilds.find((g) => g.id === wanted) ?? user.guilds[0] ?? null;
+    current = user.guilds.find((g) => g.id === wanted) ?? null;
+    if (user.superAdmin) {
+        if (current === null && wanted !== null && view === null) {
+            // A server /me doesn't list (e.g. the bot just joined): super admins can still open it.
+            current = { id: wanted, name: "Server " + wanted, iconUrl: null, access: "admin" };
+        }
+        if (current === null && view === null) current = user.guilds[0] ?? null;
+        // Super admins land on the System page when there's no server to show, e.g. while Discord is down.
+        if (current === null || !user.discordAvailable) view = "system";
+        writeUrl(false);
+        await openPage();
+        return;
+    }
+    if (current === null) current = user.guilds[0] ?? null;
     if (current === null) {
         drawServerPicker(user);
         message("No servers", "You don't have access to any server's dashboard right now.",
@@ -224,10 +323,24 @@ function start(): void {
     setSessionExpiredHandler(sessionExpired);
     const page = pageFromUrl();
     if (page !== null && PAGES.some((p) => p.id === page)) currentPage = page;
+    view = viewFromUrl();
     window.addEventListener("popstate", () => {
         if (me === null) return;
+        view = me.superAdmin ? viewFromUrl() : null;
+        if (view === "system") {
+            void openPage();
+            return;
+        }
         const id = guildFromUrl();
-        current = me.guilds.find((g) => g.id === id) ?? me.guilds[0] ?? null;
+        const listed = id === null ? undefined : sidebar?.guild(id);
+        current = me.guilds.find((g) => g.id === id)
+            ?? (me.superAdmin && listed !== undefined ? { id: listed.id, name: listed.name, iconUrl: listed.iconUrl, access: "admin" } : undefined)
+            ?? me.guilds[0] ?? null;
+        if (current === null && me.superAdmin) {
+            view = "system";
+            void openPage();
+            return;
+        }
         const p = pageFromUrl();
         currentPage = p !== null && PAGES.some((x) => x.id === p) ? p : null;
         void openPage();

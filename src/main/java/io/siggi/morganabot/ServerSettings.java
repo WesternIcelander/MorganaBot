@@ -366,6 +366,21 @@ public class ServerSettings {
     }
 
     /**
+     * Turns Twitch announcements on or off for a server ({@code enabledTwitchTracking}). Only super admins may do
+     * this; the caller checks that. Works whether Twitch is currently on or off.
+     *
+     * @return whether the value changed
+     */
+    public boolean setTwitchTracking(Actor actor, long guildId, boolean enabled) throws SettingsException {
+        return modifyAny(actor, guildId, AuditEntry.TWITCH_TRACKING, false, (serverInfo, audit) -> {
+            boolean old = serverInfo.enabledTwitchTracking;
+            audit.change("enabled", Value.bool(old), Value.bool(enabled));
+            serverInfo.enabledTwitchTracking = enabled;
+            return old != enabled;
+        });
+    }
+
+    /**
      * Sets the minimum time between two live notifications for the same streamer.
      */
     public void setNotificationCooldown(Actor actor, long guildId, long cooldownMillis) throws SettingsException {

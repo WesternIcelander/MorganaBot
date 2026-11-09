@@ -10,6 +10,8 @@ export interface PageContext {
      * `/me` and redraws.
      */
     accessChanged(): Promise<void>;
+    /** Call after a change the super admin server list shows (e.g. Twitch on/off), so it's reloaded. */
+    serverChanged(): void;
 }
 
 export interface Page {

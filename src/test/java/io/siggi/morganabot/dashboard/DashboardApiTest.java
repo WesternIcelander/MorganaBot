@@ -20,6 +20,11 @@ import io.siggi.morganabot.config.ServerInfo;
 import io.siggi.morganabot.config.ServerInfoStore;
 import io.siggi.morganabot.diagnose.Check;
 import io.siggi.morganabot.diagnose.DiagnoseResult;
+import io.siggi.morganabot.health.Component;
+import io.siggi.morganabot.health.Severity;
+import io.siggi.morganabot.health.State;
+import io.siggi.morganabot.health.SystemHealth;
+import io.siggi.morganabot.health.SystemLog;
 import io.siggi.morganabot.problems.Problem;
 import io.siggi.morganabot.problems.ServerProblems;
 import org.junit.jupiter.api.AfterEach;
@@ -91,6 +96,8 @@ class DashboardApiTest {
     private FakeGuild otherGuild;
     private ServerSocket socket;
     private String base;
+    private final java.util.concurrent.atomic.AtomicLong clock = new java.util.concurrent.atomic.AtomicLong(1_000_000L);
+    private SystemHealth health;
 
     /** A fake Discord server. */
     private static final class FakeGuild implements GuildData {
@@ -132,6 +139,11 @@ class DashboardApiTest {
         @Override
         public String iconUrl() {
             return null;
+        }
+
+        @Override
+        public int memberCount() {
+            return members.size();
         }
 
         @Override
@@ -313,6 +325,9 @@ class DashboardApiTest {
             return result;
         };
         new DashboardApi(store, settings, access, auditLog, problems, provider, lookup, twitchRed::get).register(api);
+        health = new SystemHealth(new SystemLog(tempDir.resolve("system-log.jsonl").toFile(), new Gson()), clock::get);
+        health.setGeneralInfo(() -> Map.of("startedAt", 5L, "uptimeMillis", 90_500L, "version", "1.2.3", "servers", 2, "streamersTracked", 2));
+        new AdminApi(store, problems, provider, () -> health).register(api);
 
         HTTPServer server = new HTTPServerBuilder().setSessions(sessions).build();
         api.register(server);
@@ -861,6 +876,156 @@ class DashboardApiTest {
         assertEquals(1, problems.list(GUILD).size());
         assertEquals(1, request("DELETE", admin, "/guilds/100/problems", null).json().get("dismissed").getAsInt());
         assertTrue(problems.list(GUILD).isEmpty());
+    }
+
+    // --- super admin ---
+
+    @Test
+    void adminEndpointsAreForbiddenForNormalSessions() throws IOException {
+        health.log(Component.BOT, Severity.ERROR, "boom", null);
+        String id = health.getLog().list().get(0).id;
+        for (long user : new long[]{ADMIN, ROLE_ADMIN, STREAMER, NOBODY}) {
+            Login login = login(user);
+            assertEquals(403, get(login, "/admin/guilds").code());
+            assertEquals(403, get(login, "/admin/system").code());
+            assertEquals(403, get(login, "/admin/system/log").code());
+            assertEquals(403, request("DELETE", login, "/admin/system/log/" + id, null).code());
+        }
+        assertEquals(1, health.getLog().list().size(), "nothing dismissed");
+    }
+
+    @Test
+    void adminGuildListHasSummaries() throws IOException {
+        problems.record(GUILD, new Problem(Problem.SEND_LIVE_MESSAGE, Problem.Target.channel(LIVE, "live"), null, "Missing permission"));
+        JsonObject json = get(login(SUPER, true), "/admin/guilds").json();
+        assertTrue(json.get("discordAvailable").getAsBoolean());
+        JsonArray list = json.getAsJsonArray("guilds");
+        assertEquals(2, list.size());
+        JsonObject main = list.get(0).getAsJsonObject();
+        assertEquals("100", main.get("id").getAsString());
+        assertEquals("Main", main.get("name").getAsString());
+        assertEquals(5, main.get("memberCount").getAsInt());
+        assertTrue(main.get("twitchEnabled").getAsBoolean());
+        assertEquals(2, main.get("streamers").getAsInt());
+        assertEquals(1, main.get("problems").getAsInt());
+        JsonObject other = list.get(1).getAsJsonObject();
+        assertEquals("Other", other.get("name").getAsString());
+        assertFalse(other.get("twitchEnabled").getAsBoolean());
+        assertEquals(0, other.get("streamers").getAsInt());
+        assertEquals(0, other.get("problems").getAsInt());
+    }
+
+    @Test
+    void superAdminTurnsTwitchOnAndOff() throws IOException {
+        Login sa = login(SUPER, true);
+        Response off = request("PATCH", sa, "/guilds/100/settings", "{\"enabledTwitchTracking\": false, \"deleteOnOffline\": true}");
+        assertEquals(200, off.code(), off.body());
+        assertFalse(off.json().get("enabledTwitchTracking").getAsBoolean());
+        assertFalse(store.get(GUILD).enabledTwitchTracking);
+        assertTrue(store.get(GUILD).deleteNotificationsOnOffline, "other values apply before Twitch goes off");
+        AuditEntry entry = auditLog.read(GUILD, false).get(0);
+        assertEquals(AuditEntry.TWITCH_TRACKING, entry.type);
+        assertEquals(Actor.Source.SUPER_ADMIN, entry.actor.source);
+        assertEquals("enabled", entry.changes.get(0).field);
+        assertEquals(AuditEntry.VISIBILITY_SERVER, entry.visibility, "servers see the bot admin's change");
+
+        // While off, normal admins can't change Twitch settings...
+        assertEquals(409, request("PATCH", login(ADMIN), "/guilds/100/settings", "{\"deleteOnOffline\": false}").code());
+        // ...and turning it on applies the other values in the same request.
+        Response on = request("PATCH", sa, "/guilds/100/settings", "{\"enabledTwitchTracking\": true, \"deleteOnOffline\": false}");
+        assertEquals(200, on.code(), on.body());
+        assertTrue(store.get(GUILD).enabledTwitchTracking);
+        assertFalse(store.get(GUILD).deleteNotificationsOnOffline);
+
+        int entries = auditLog.read(GUILD, false).size();
+        assertEquals(200, request("PATCH", sa, "/guilds/100/settings", "{\"enabledTwitchTracking\": true}").code());
+        assertEquals(entries, auditLog.read(GUILD, false).size(), "no change, no audit entry");
+
+        assertEquals(400, request("PATCH", sa, "/guilds/100/settings", "{\"enabledTwitchTracking\": \"yes\"}").code());
+        assertEquals(400, request("PATCH", sa, "/guilds/100/settings", "{\"enabledTwitchTracking\": null}").code());
+        // A server without a settings file yet can be switched on.
+        assertEquals(200, request("PATCH", sa, "/guilds/200/settings", "{\"enabledTwitchTracking\": true}").code());
+        assertTrue(store.get(OTHER_GUILD).enabledTwitchTracking);
+    }
+
+    @Test
+    void systemStatusCardsAndGeneralInfo() throws IOException {
+        Login sa = login(SUPER, true);
+        JsonObject json = get(sa, "/admin/system").json();
+        assertFalse(json.get("anyRed").getAsBoolean());
+        JsonArray cards = json.getAsJsonArray("components");
+        assertEquals(4, cards.size());
+        assertEquals("DISCORD", cards.get(0).getAsJsonObject().get("id").getAsString());
+        assertEquals("1.2.3", json.get("version").getAsString());
+        assertEquals(90.0, json.get("uptimeSeconds").getAsDouble());
+        assertEquals(2, json.get("servers").getAsInt());
+        assertEquals("Bot", json.getAsJsonObject("componentLabels").get("BOT").getAsString());
+
+        health.problem(Component.TWITCH_API, State.RED, "Twitch rejected the client secret", null);
+        health.detail(Component.TWITCH_API, "tokenExpiry", 123_000L);
+        health.detail(Component.TWITCH_API, "rateLimitReset", "456");
+        health.detail(Component.TWITCH_API, "somethingNew", List.of("a"));
+        json = get(sa, "/admin/system").json();
+        assertTrue(json.get("anyRed").getAsBoolean());
+        JsonObject twitch = null;
+        for (JsonElement card : json.getAsJsonArray("components")) {
+            if (card.getAsJsonObject().get("id").getAsString().equals("TWITCH_API")) twitch = card.getAsJsonObject();
+        }
+        assertNotNull(twitch);
+        assertEquals("RED", twitch.get("state").getAsString());
+        assertEquals("Twitch rejected the client secret", twitch.get("message").getAsString());
+        assertEquals("Twitch rejected the client secret", twitch.get("lastError").getAsString());
+        JsonArray details = twitch.getAsJsonArray("details");
+        assertEquals(3, details.size());
+        assertEquals("tokenExpiry", details.get(0).getAsJsonObject().get("key").getAsString());
+        assertEquals("time", details.get(0).getAsJsonObject().get("kind").getAsString());
+        assertEquals("123000", details.get(0).getAsJsonObject().get("value").getAsString());
+        assertEquals("456000", details.get(1).getAsJsonObject().get("value").getAsString(), "epoch seconds become millis");
+        assertEquals("text", details.get(2).getAsJsonObject().get("kind").getAsString());
+    }
+
+    @Test
+    void systemLogFiltersPagesAndDismisses() throws IOException {
+        Login sa = login(SUPER, true);
+        for (int i = 0; i < 5; i++) {
+            clock.addAndGet(1000L);
+            health.log(i % 2 == 0 ? Component.TWITCH_API : Component.DISCORD, i < 3 ? Severity.ERROR : Severity.WARNING, "message " + i,
+                    i == 0 ? new RuntimeException("trace") : null);
+        }
+        // Two entries last seen at the same time must stay on one page.
+        clock.addAndGet(1000L);
+        health.log(Component.BOT, Severity.ERROR, "same time a", null);
+        health.log(Component.BOT, Severity.ERROR, "same time b", null);
+
+        JsonObject all = get(sa, "/admin/system/log").json();
+        assertEquals(7, all.getAsJsonArray("entries").size());
+        assertEquals(7, all.get("total").getAsInt());
+        assertTrue(all.get("nextBefore").isJsonNull());
+
+        JsonObject page = get(sa, "/admin/system/log?limit=1").json();
+        assertEquals(2, page.getAsJsonArray("entries").size(), "same-time entries aren't split");
+        String before = page.get("nextBefore").getAsString();
+        JsonObject next = get(sa, "/admin/system/log?limit=2&before=" + before).json();
+        assertEquals("message 4", next.getAsJsonArray("entries").get(0).getAsJsonObject().get("message").getAsString());
+        assertEquals("message 3", next.getAsJsonArray("entries").get(1).getAsJsonObject().get("message").getAsString());
+
+        JsonArray twitch = get(sa, "/admin/system/log?component=twitch_api").json().getAsJsonArray("entries");
+        assertEquals(3, twitch.size());
+        JsonArray warnings = get(sa, "/admin/system/log?severity=WARNING").json().getAsJsonArray("entries");
+        assertEquals(2, warnings.size());
+        JsonArray both = get(sa, "/admin/system/log?component=TWITCH_API&severity=ERROR").json().getAsJsonArray("entries");
+        assertEquals(2, both.size());
+        JsonObject withTrace = both.get(1).getAsJsonObject();
+        assertEquals("message 0", withTrace.get("message").getAsString());
+        assertTrue(withTrace.get("detail").getAsString().contains("trace"));
+        assertEquals(400, get(sa, "/admin/system/log?component=nope").code());
+        assertEquals(400, get(sa, "/admin/system/log?severity=nope").code());
+        assertEquals(400, get(sa, "/admin/system/log?before=x").code());
+
+        String id = withTrace.get("id").getAsString();
+        assertEquals(200, request("DELETE", sa, "/admin/system/log/" + id, null).code());
+        assertEquals(404, request("DELETE", sa, "/admin/system/log/" + id, null).code());
+        assertEquals(6, health.getLog().list().size());
     }
 
     @Test

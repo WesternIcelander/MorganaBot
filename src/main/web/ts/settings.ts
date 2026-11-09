@@ -50,6 +50,7 @@ async function renderSettingsPage(root: HTMLElement, context: PageContext): Prom
     const admin: AdminContext = { guild: context.guild, refs, panel, twitchOff: settings.twitchDisabledMessage !== null };
     replace(root,
         h("h1", null, "Settings"),
+        settings.enabledTwitchTracking !== undefined ? twitchSection(context, settings, () => renderSettingsPage(root, context)) : null,
         settings.twitchDisabledMessage !== null ? h("p", { class: "notice warn", role: "status" }, settings.twitchDisabledMessage,
             " Twitch settings can't be changed until it's turned on.") : null,
         panel.element,
@@ -59,6 +60,42 @@ async function renderSettingsPage(root: HTMLElement, context: PageContext): Prom
         messageRulesSection(admin, rules),
         accessSection(admin, adminRoles));
     await panel.load();
+}
+
+/**
+ * The Twitch on/off switch (`enabledTwitchTracking`), only sent to super admin sessions. Turning it on or off changes
+ * what every other section may do, so the page is drawn again afterwards.
+ */
+function twitchSection(context: PageContext, settings: Settings, redraw: () => Promise<void>): HTMLElement {
+    const enabled = settings.enabledTwitchTracking === true;
+    const errors = new FormErrors();
+    const toggle = h("button", { type: "button", class: enabled ? "danger" : "primary" },
+        enabled ? "Turn Twitch announcements off" : "Turn Twitch announcements on");
+    toggle.addEventListener("click", () => {
+        errors.clear();
+        void busy(toggle, async () => {
+            try {
+                await api<Settings>("PATCH", guildPath(context.guild) + "/settings", { enabledTwitchTracking: !enabled });
+            } catch (error) {
+                errors.show(error);
+                return;
+            }
+            context.serverChanged();
+            await redraw();
+        });
+    });
+    return h("section", { class: "card super-only", "aria-labelledby": "twitch-title" },
+        h("div", { class: "card-head" },
+            h("h2", { id: "twitch-title" }, "Twitch announcements"),
+            h("span", { class: "badge super" }, "Super admin")),
+        h("p", null, "Twitch announcements are ", h("strong", null, enabled ? "on" : "off"), " for this server."),
+        h("p", { class: "hint" }, enabled
+            ? "Turning them off stops the server's admins from changing Twitch settings. Their streamers and settings are kept."
+            : "While off, the server's admins see a \"not enabled\" message and can't change Twitch settings. Only bot admins can turn this on."),
+        h("p", { class: "hint" }, "The change is recorded in the server's audit log as made by a bot admin."),
+        h("div", { class: "row" }, toggle),
+        errors.field("enabledTwitchTracking", toggle),
+        errors.general);
 }
 
 /** A place for Diagnose's warnings about one setting, kept up to date. */

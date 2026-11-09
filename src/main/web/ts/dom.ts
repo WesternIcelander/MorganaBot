@@ -39,6 +39,7 @@ export interface Attrs {
     "aria-live"?: string;
     "aria-describedby"?: string;
     "aria-disabled"?: string;
+    "aria-hidden"?: string;
     onclick?: (event: MouseEvent) => void;
     onsubmit?: (event: SubmitEvent) => void;
     oninput?: (event: Event) => void;

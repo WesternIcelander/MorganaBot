@@ -300,3 +300,85 @@ export interface AuditPage {
     entries: AuditEntry[];
     nextBefore: Id | null;
 }
+
+// --- super admin (io.siggi.morganabot.dashboard.AdminApi) ---
+
+/** One server in `GET /admin/guilds`. */
+export interface AdminGuild {
+    id: Id;
+    name: string;
+    iconUrl: string | null;
+    memberCount: number;
+    twitchEnabled: boolean;
+    streamers: number;
+    /** Recorded failures (the server's Problems list). */
+    problems: number;
+    /** Set when the server's settings file couldn't be read. */
+    error?: string;
+}
+
+/** `GET /admin/guilds` */
+export interface AdminGuilds {
+    discordAvailable: boolean;
+    guilds: AdminGuild[];
+}
+
+export type HealthState = "UNKNOWN" | "GREEN" | "AMBER" | "RED";
+
+/** A labelled live value on a status card. `time` values are ms since the epoch. */
+export interface HealthDetail {
+    key: string;
+    label: string;
+    kind: "time" | "number" | "text";
+    value: string;
+}
+
+export interface HealthCard {
+    id: string;
+    label: string;
+    state: HealthState;
+    since: Id;
+    message: string;
+    lastError: string | null;
+    lastErrorTime: Id | null;
+    details: HealthDetail[];
+}
+
+/** `GET /admin/system` */
+export interface SystemStatus {
+    anyRed: boolean;
+    discordAvailable: boolean;
+    components: HealthCard[];
+    startedAt: Id | null;
+    uptimeSeconds: number | null;
+    version: string | null;
+    buildTime: string | null;
+    /** Null while Discord isn't connected. */
+    servers: number | null;
+    streamersTracked: number | null;
+    /** Every component that can appear in the log, with its label. */
+    componentLabels: Record<string, string>;
+}
+
+export type LogSeverity = "WARNING" | "ERROR";
+
+export interface SystemLogEntry {
+    id: string;
+    component: string;
+    severity: LogSeverity;
+    message: string;
+    /** Stack trace of the latest occurrence, or null. */
+    detail: string | null;
+    /** First seen. */
+    time: Id;
+    lastSeen: Id;
+    count: number;
+}
+
+/** `GET /admin/system/log` */
+export interface SystemLogPage {
+    entries: SystemLogEntry[];
+    /** Pass as `before` for the next page; null on the last page. */
+    nextBefore: Id | null;
+    total: number;
+}

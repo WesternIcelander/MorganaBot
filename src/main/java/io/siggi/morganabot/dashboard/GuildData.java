@@ -101,6 +101,9 @@ public interface GuildData {
     /** The server icon URL, or null. */
     String iconUrl();
 
+    /** How many members the server has (Discord's count). */
+    int memberCount();
+
     /** Text and announcement channels, in Discord's order. */
     List<ChannelInfo> channels();
 

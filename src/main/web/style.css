@@ -294,3 +294,94 @@ table.streamers .actions button { padding: 3px 10px; font-size: 0.9rem; }
 @media (max-width: 600px) { .template-change { grid-template-columns: 1fr; } }
 .tabs a { white-space: nowrap; }
 table.streamers td .badge { white-space: nowrap; }
+
+/* --- super admin: sidebar, System page --- */
+
+.layout { display: block; }
+body.with-sidebar .layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); align-items: start; }
+.main-column { min-width: 0; }
+.sidebar {
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    padding: 12px 14px 24px;
+    position: sticky;
+    top: 0;
+    min-height: calc(100vh - 52px);
+    max-height: 100vh;
+    overflow-y: auto;
+}
+.sidebar input[type="text"] { width: 100%; max-width: none; margin: 4px 0 6px; }
+.side-nav { list-style: none; margin: 0 0 12px; padding: 0; }
+.side-link {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    color: var(--text);
+    text-decoration: none;
+    font-weight: 600;
+}
+.side-link:hover, .server-item:hover { background: var(--bg); }
+.side-link[aria-current="page"], .server-item[aria-current="page"] { background: var(--info-bg); outline: 1px solid var(--info-border); }
+.side-title { font-size: 0.95rem; margin: 8px 0 4px; color: var(--muted); }
+.side-filters { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 0.9rem; }
+.red-dot, .problem-dot {
+    display: inline-block;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--danger);
+    flex: none;
+}
+.problem-dot { background: var(--warn-border); margin-left: 6px; vertical-align: 1px; }
+.server-list { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.server-item { display: flex; gap: 10px; align-items: flex-start; padding: 6px 8px; border-radius: 6px; color: var(--text); text-decoration: none; }
+.server-icon { flex: none; width: 32px; height: 32px; border-radius: 50%; object-fit: cover; }
+.server-icon.placeholder {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: var(--muted);
+}
+.server-text { display: flex; flex-direction: column; min-width: 0; }
+.server-title { font-weight: 600; overflow-wrap: anywhere; }
+.server-id, .server-summary { font-size: 0.8rem; color: var(--muted); overflow-wrap: anywhere; }
+@media (max-width: 800px) {
+    body.with-sidebar .layout { display: block; }
+    .sidebar { position: static; min-height: 0; max-height: none; border-right: none; border-bottom: 1px solid var(--border); padding: 10px 16px 12px; }
+    .server-list { max-height: 40vh; overflow-y: auto; }
+}
+
+.super-only { border-color: var(--accent); }
+
+.health-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; margin-bottom: 16px; }
+.health-cards .card { margin-bottom: 0; border-top-width: 4px; overflow-wrap: anywhere; }
+.health-card.ok { border-top-color: var(--ok); }
+.health-card.warn { border-top-color: var(--warn-border); }
+.health-card.error { border-top-color: var(--danger); background: var(--error-bg); }
+.health-card .facts { margin-top: 8px; grid-template-columns: max-content 1fr; }
+.health-message { font-weight: 600; margin: 0 0 4px; }
+.last-error { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--border); }
+.last-error p { margin: 0; }
+.badge.state.ok { color: var(--ok); border-color: var(--ok); }
+.badge.state.warn { background: var(--warn-bg); border-color: var(--warn-border); }
+.badge.state.error { background: var(--danger); border-color: var(--danger); color: #fff; }
+.badge.state.unknown { color: var(--muted); }
+
+.log-list { list-style: none; margin: 12px 0 0; padding: 0; }
+.log-entry { padding: 10px 0; border-top: 1px solid var(--border); overflow-wrap: anywhere; }
+.log-entry.error { border-left: 3px solid var(--danger); padding-left: 10px; }
+.log-entry.warn { border-left: 3px solid var(--warn-border); padding-left: 10px; }
+.log-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.log-head .spacer { flex: 1; }
+.log-head button { padding: 2px 10px; }
+.log-component { font-weight: 600; }
+.log-message { margin: 4px 0 0; white-space: pre-wrap; }
+.stack-trace summary { cursor: pointer; color: var(--muted); font-size: 0.9rem; }
+.stack-trace pre { overflow-x: auto; max-height: 360px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-size: 0.8rem; margin: 4px 0 0; }
+.log-footer { margin-top: 10px; }

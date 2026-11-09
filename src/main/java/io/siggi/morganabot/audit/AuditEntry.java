@@ -35,6 +35,8 @@ public class AuditEntry {
     public static final String SELF_SERVICE_EXPIRY = "selfServiceExpiry";
     public static final String ADMIN_ROLES = "adminRoles";
     public static final String MESSAGE_RULES = "messageRules";
+    /** {@code enabledTwitchTracking} turned on or off (super admins only). */
+    public static final String TWITCH_TRACKING = "twitchTracking";
 
     public static final String VISIBILITY_SERVER = "server";
     public static final String VISIBILITY_SUPER_ADMIN = "superAdmin";

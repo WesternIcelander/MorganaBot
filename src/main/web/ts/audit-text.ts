@@ -23,6 +23,7 @@ export const AUDIT_TYPES: Record<string, string> = {
     selfServiceExpiry: "Self-service removal time",
     adminRoles: "Admin roles",
     messageRules: "Message permissions",
+    twitchTracking: "Twitch announcements",
 };
 
 export function typeLabel(type: string): string {
@@ -144,6 +145,9 @@ export function changeText(change: AuditChange, type = ""): string {
     const to = valueText(newValue, change.field, type);
     const added = oldValue === null && newValue !== null;
     const removed = newValue === null && oldValue !== null;
+    if (type === "twitchTracking" && change.field === "enabled") {
+        return "Twitch announcements " + (newValue?.value === "true" ? "enabled" : "disabled");
+    }
     if (change.field === "adminRole" || change.field === "mentionRole" || change.field === "rule") {
         if (added) return label + " added: " + to;
         if (removed) return label + " removed: " + from;

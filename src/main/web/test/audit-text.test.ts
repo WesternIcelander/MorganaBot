@@ -61,3 +61,11 @@ test("actorsOf lists each person once, without the bot", () => {
     const people = actorsOf([entry(actor("command", "bob", "2")), entry(actor("dashboard", "alice", "1")), entry(actor("command", "bob", "2")), entry(actor("system", "system", null))]);
     assert.deepEqual(people, [["1", "alice (1)"], ["2", "bob (2)"]]);
 });
+
+test("the Twitch switch reads as enabled/disabled", () => {
+    assert.equal(typeLabel("twitchTracking"), "Twitch announcements");
+    assert.equal(changeText({ field: "enabled", old: { kind: "boolean", value: "false" }, new: { kind: "boolean", value: "true" } }, "twitchTracking"),
+        "Twitch announcements enabled");
+    assert.equal(changeText({ field: "enabled", old: { kind: "boolean", value: "true" }, new: { kind: "boolean", value: "false" } }, "twitchTracking"),
+        "Twitch announcements disabled");
+});

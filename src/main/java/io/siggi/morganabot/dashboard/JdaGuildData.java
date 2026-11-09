@@ -104,6 +104,11 @@ public final class JdaGuildData implements GuildData {
     }
 
     @Override
+    public int memberCount() {
+        return guild.getMemberCount();
+    }
+
+    @Override
     public List<ChannelInfo> channels() {
         List<ChannelInfo> list = new ArrayList<>();
         for (GuildChannel channel : guild.getChannels()) {

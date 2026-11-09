@@ -70,7 +70,7 @@ class FrontendBuildTest {
         }
         assertTrue(seen.contains("web/js/http.js"));
         assertTrue(seen.contains("web/js/stream.js"));
-        for (String page : List.of("settings", "streamers", "audit", "problems", "admin-ui", "template-editor", "diagnose", "audit-text", "preview")) {
+        for (String page : List.of("settings", "streamers", "audit", "problems", "admin-ui", "template-editor", "diagnose", "audit-text", "preview", "sidebar", "system", "super-text")) {
             assertTrue(seen.contains("web/js/" + page + ".js"), page + ".js isn't loaded by the shell");
         }
     }

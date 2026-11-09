@@ -14,11 +14,16 @@
     <div id="server-picker" class="server-picker"></div>
     <div id="account" class="account"></div>
 </header>
-<nav id="nav" class="tabs" aria-label="Pages"></nav>
-<div id="banner" class="notice" role="alert" hidden></div>
-<main id="content">
-    <p class="loading">Loading…</p>
-</main>
+<div class="layout">
+    <aside id="sidebar" class="sidebar" aria-label="Super admin" hidden></aside>
+    <div class="main-column">
+        <nav id="nav" class="tabs" aria-label="Pages"></nav>
+        <div id="banner" class="notice" role="alert" hidden></div>
+        <main id="content">
+            <p class="loading">Loading…</p>
+        </main>
+    </div>
+</div>
 <noscript><p class="notice error">The dashboard needs JavaScript.</p></noscript>
 </body>
 </html>
