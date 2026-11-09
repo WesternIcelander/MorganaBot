@@ -220,9 +220,15 @@ Every file under `data/` must keep loading after a deploy, with nothing lost and
 ### Steps (each finished step = commit on main, then tick here with the hash)
 
 - [ ] 1. **Server data store with locking.** Commands, Twitch notifications and the web UI all load, change and save the same `data/servers/<id>.json` with no locking. The web UI makes it more likely that one save overwrites another. Notification handling already has this race. Its async callback saves `lastLiveNotificationId` on the `ServerInfo` it loaded *before* sending, so anything changed in between gets reverted, e.g. a streamer deleted while their live post was sending comes back. That callback must go through `modify()` and find the streamer again by Twitch ID (and do nothing if they were removed). Add a `ServerInfoStore` that keeps one cached `ServerInfo` per guild, with a per-guild lock and a `modify(guildId, fn)` method that saves after the change. Move `bot.getServerInfo` and every caller onto it. The cache reloads a file when its modified time on disk changes, so hand edits made while the bot is running are picked up and not overwritten (see Data compatibility).
-- [ ] 2. **Move settings logic out of the command handler.** Create a `ServerSettings` service that does all the validation and changes for each setting, and calls `triggerUpdate` when needed. The command handlers then just parse options and pass them to it. While doing this, fix the `getStreamer` wrong-match bug and the `/addstreamer` NullPointerException listed below.
+- [ ] 2. **Move settings logic out of the command handler.** Create a `ServerSettings` service that does all the validation and changes for each setting, and calls `triggerUpdate` when needed. The command handlers then just parse options and pass them to it. While doing this, fix these known bugs:
+  - the `getStreamer` wrong-match bug
+  - the `/addstreamer` NullPointerException
+  - change `/setchanneloverride`'s `channel` option to `OptionType.CHANNEL` and drop the `<#…>` stripping in `getChannelId`. Existing production overrides are stored as IDs, so they're unaffected.
+  - make `/streamerlist` links use the Twitch login, not the display name
 - [ ] 3. **Server audit log (core).** Add `AuditLog`, which appends entries to `data/servers/<guildId>-audit.jsonl` under the per-server lock and trims each file to 1000 entries. Entries have a time, type, actor (user ID and name, or "system"), source (command, dashboard, super admin), details (old → new, with IDs plus names), and visibility (`server` or `superAdmin`). Every change in `ServerSettings` (step 2) records an entry, so commands are audited from now on, and the dashboard is automatically audited once it exists. The step 2 service methods take an "actor" parameter so they know who made the change and from where.
-- [ ] 4. **Record failed actions per server.** Today every Discord action is fired with `.queue()` and no failure handler, so failures vanish. Add a `ServerProblems` record for each guild, saved to `data/servers/<id>-problems.json` and kept to the newest 100 entries. Each entry has a time, the action, the target (channel, role, member or streamer), and a readable reason, e.g. "Missing permission Send Messages in #live", "Unknown channel (deleted?)", "Role @Live is above the bot's highest role". Add failure callbacks that write an entry to every action in `handleLiveNotification` (send, delete, add role, remove role), and map common JDA errors (`InsufficientPermissionException`, `HierarchyException`, `ErrorResponseException` with `MISSING_PERMISSIONS` / `UNKNOWN_CHANNEL` / `UNKNOWN_MESSAGE` / `UNKNOWN_MEMBER`) to friendly text. Also log the cases that are skipped without anything being attempted: the configured channel is missing or isn't a text channel, the live role was deleted, or no channel is set. Repeated identical failures are combined into one entry with a count and a last-seen time, so a streamer going live 20 times doesn't fill the list. Problems with Twitch itself (token refresh, subscription sync, failed `getChannelInformation`) affect every server, so they go to the system log (step 5) instead. Entries can be dismissed: one at a time, or all at once. Writes to the problem log are locked per server, like the server store.
+- [ ] 4. **Record failed actions per server.** Today every Discord action is fired with `.queue()` and no failure handler, so failures vanish. Add a `ServerProblems` record for each guild, saved to `data/servers/<id>-problems.json` and kept to the newest 100 entries. Each entry has a time, the action, the target (channel, role, member or streamer), and a readable reason, e.g. "Missing permission Send Messages in #live", "Unknown channel (deleted?)", "Role @Live is above the bot's highest role". Add failure callbacks that write an entry to every action in `handleLiveNotification` (send, delete, add role, remove role), and map common JDA errors (`InsufficientPermissionException`, `HierarchyException`, `ErrorResponseException` with `MISSING_PERMISSIONS` / `UNKNOWN_CHANNEL` / `UNKNOWN_MESSAGE` / `UNKNOWN_MEMBER`) to friendly text. Also log the cases that are skipped without anything being attempted: the configured channel is missing or isn't a text channel, the live role was deleted, or no channel is set. Repeated identical failures are combined into one entry with a count and a last-seen time, so a streamer going live 20 times doesn't fill the list. Problems with Twitch itself (token refresh, subscription sync, failed `getChannelInformation`) affect every server, so they go to the system log (step 5) instead. Entries can be dismissed: one at a time, or all at once. Writes to the problem log are locked per server, like the server store. Fix these known bugs in `handleLiveNotification` first, so they don't produce failure entries:
+  - accept any `StandardGuildMessageChannel`, so announcement channels work
+  - don't try to add or remove the live role for streamers with no linked Discord user (`discordId == 0`)
 - [ ] 5. **System health monitoring (backend).**
   - **`SystemHealth`:** live status per component (Discord, Twitch API, EventSub, Storage), plus `SystemLog`, which appends to `data/system-log.jsonl` (combining repeats, newest 1000, thread-safe).
   - **Hook every error path into it:**
@@ -237,6 +243,10 @@ Every file under `data/` must keep loading after a deploy, with nothing lost and
     - Start the web server and Twitch watcher before Discord, and don't let a Discord failure abort startup.
     - Retry temporary failures with backoff, but not an invalid token or disallowed intents.
     - The Twitch watcher's guild loops wait until Discord is ready.
+  - **Known bugs fixed here** (step 5 already reworks the watcher's token and error handling):
+    - **Token refresh:** keep the old token until the new one is in place, refresh under a lock from any thread (not only the loop thread), refresh early when `twitchAppAccessTokenExpiry` is near, and make the `AuthCache` access thread-safe. This also fixes the expired-token bug.
+    - **Online/offline ordering:** handle each streamer's notifications one at a time (a per-Twitch-ID lock), run the cooldown check inside it, and have offline wait for an in-flight send so it can delete the new post.
+    - **`triggerUpdate()` after `stop()`:** keep the thread reference, and make `triggerUpdate()` do nothing once stopped.
   - **Alerting:** DM super admins when a component turns red or recovers, rate-limited, with stdout as the fallback.
   - **Recovery login:** print a single-use super admin login link to stdout (15 minutes) when Discord fails, and hourly while it stays down. This needs the login token store from step 9, so the stdout link is wired up in that step.
 - [ ] 6. **Diagnose: check every streamer's setup without waiting for a stream.** Add `Diagnose.run(guild)`, which works out what *would* happen on each streamer's next go-live and reports anything that would fail. It doesn't post or change anything, and doesn't store results. It runs:
@@ -299,6 +309,7 @@ Every file under `data/` must keep loading after a deploy, with nothing lost and
   - **Posting:** build the message with explicit `allowed_mentions`:
     - ping = exactly the mentions written in the template text (no permission check at post time)
     - Twitch-supplied values are defused (`@` → `@\u200B`) before insertion; template text is never altered
+    - `${twitch_link}` uses the broadcaster's login (`broadcaster_user_login` from the event), not the display name (known bug)
   - **Commands:**
     - `/addadminrole` and `/removeadminrole` (Administrator-only by default, and checked by the bot)
     - `/addmessagerole role: allow-everyone: mention-roles:` and `/removemessagerole role:` (admin-only by default)
@@ -383,24 +394,26 @@ Every file under `data/` must keep loading after a deploy, with nothing lost and
 
 ## Known bugs / candidates
 
+Every known bug is assigned to a step. Tick it here, with the commit hash, when that step lands. New bugs found later get assigned to a step too, or get their own.
+
 Race conditions (SiggiHTTP handles each request on its own thread, and JDA command events run on a separate thread, so these overlap in practice):
 - [ ] Unlocked load-modify-save of server files, and the stale `lastLiveNotificationId` save. Fixed by step 1.
-- [ ] Offline arriving right after online: `lastLiveNotificationId` is only saved once Discord confirms the send, so a quick offline finds nothing to delete and the post stays up (commit `d2546e6` cleans it up at the next go-live). Two notifications for the same streamer can also run the cooldown check at the same time. Fix: process events per streamer one at a time (a per-Twitch-ID lock or a single-threaded queue), and have offline wait for an in-flight send.
-- [ ] Token refresh window: `runLoop` clears the token before fetching a new one, and other threads throw "Auth token not available" in the gap, so notifications are dropped. `AuthCache` fields are shared across threads with no synchronization. Fix: keep the old token until the new one is in place, refresh under a lock from any thread, and refresh early when `twitchAppAccessTokenExpiry` is near. This also fixes the expired-token item below.
-- [ ] `triggerUpdate()` NullPointerException after `stop()` sets `thread` to null.
+- [ ] Offline arriving right after online: `lastLiveNotificationId` is only saved once Discord confirms the send, so a quick offline finds nothing to delete and the post stays up (commit `d2546e6` cleans it up at the next go-live). Two notifications for the same streamer can also run the cooldown check at the same time. Fix: process events per streamer one at a time (a per-Twitch-ID lock or a single-threaded queue), and have offline wait for an in-flight send. Fixed by step 5.
+- [ ] Token refresh window: `runLoop` clears the token before fetching a new one, and other threads throw "Auth token not available" in the gap, so notifications are dropped. `AuthCache` fields are shared across threads with no synchronization. Fix: keep the old token until the new one is in place, refresh under a lock from any thread, and refresh early when `twitchAppAccessTokenExpiry` is near. This also fixes the expired-token item below. Fixed by step 5.
+- [ ] `triggerUpdate()` NullPointerException after `stop()` sets `thread` to null. Fixed by step 5.
 
 Security:
 - [ ] Twitch stream titles (and other Twitch values) are inserted into the live message with no mention filtering, so a title containing `@everyone`/`@here` or `<@&role>` pings if the bot has the permission. Fixed by step 8 (defusing Twitch values plus `allowed_mentions`).
 
 Other:
 
-- [ ] `getStreamer` (`TwitchCommandHandler`) matches the wrong streamer when only a Twitch name is given: `discordUserId` is 0, so any streamer with `discordId == 0` matches first. `/deletestreamer twitch-name:X` can delete someone else.
-- [ ] `/addstreamer` with a nonexistent Twitch name NPEs (`getStreamerInfoByUsername` returns null) → generic error instead of a helpful message.
-- [ ] Expired Twitch app token isn't detected in the notification path: `getAuthToken` never checks `twitchAppAccessTokenExpiry`, and failures in `handleNotification` are swallowed, so live posts silently fail until the hourly loop refreshes the token.
-- [ ] Announcement (news) channels are silently skipped: `handleLiveNotification` only accepts `TextChannel`, so a live channel that's an announcement channel never gets posts, and nothing reports it. Fix: accept any `StandardGuildMessageChannel` (text and announcement). Diagnose (step 6) flags it in the meantime.
-- [ ] `${twitch_link}` and `/streamerlist` links use display name instead of login name — breaks for non-Latin display names.
-- [ ] `/setchanneloverride`'s `channel` option is `OptionType.STRING` rather than `CHANNEL`; that's why `getChannelId` has the "JDA bug" `<#…>` stripping workaround.
-- [ ] Live role add/remove is attempted for streamers with no linked Discord user (`discordId == 0`).
+- [ ] `getStreamer` (`TwitchCommandHandler`) matches the wrong streamer when only a Twitch name is given: `discordUserId` is 0, so any streamer with `discordId == 0` matches first. `/deletestreamer twitch-name:X` can delete someone else. Fixed by step 2.
+- [ ] `/addstreamer` with a nonexistent Twitch name NPEs (`getStreamerInfoByUsername` returns null) → generic error instead of a helpful message. Fixed by step 2.
+- [ ] Expired Twitch app token isn't detected in the notification path: `getAuthToken` never checks `twitchAppAccessTokenExpiry`, and failures in `handleNotification` are swallowed, so live posts silently fail until the hourly loop refreshes the token. Fixed by step 5.
+- [ ] Announcement (news) channels are silently skipped: `handleLiveNotification` only accepts `TextChannel`, so a live channel that's an announcement channel never gets posts, and nothing reports it. Fix: accept any `StandardGuildMessageChannel` (text and announcement). Diagnose (step 6) flags it in the meantime. Fixed by step 4.
+- [ ] `${twitch_link}` and `/streamerlist` links use display name instead of login name — breaks for non-Latin display names. Fixed by steps 2 (`/streamerlist`) and 8 (`${twitch_link}`).
+- [ ] `/setchanneloverride`'s `channel` option is `OptionType.STRING` rather than `CHANNEL`; that's why `getChannelId` has the "JDA bug" `<#…>` stripping workaround. Fixed by step 2.
+- [ ] Live role add/remove is attempted for streamers with no linked Discord user (`discordId == 0`). Fixed by step 4.
 
 ## Notes
 
