@@ -20,6 +20,7 @@ Server settings:
 - Delete notifications on offline (`/setdeleteonoffline`)
 - Server-wide live message template (`/setlivemessage`), with the variable list and a preview
 - Notification cooldown (`streamNotificationCooldown`; no command for it today)
+- Auto-publish per announcement channel (step 19)
 - `enabledTwitchTracking` is **super admin only** (see below). Normal sessions never see or send it. If it's off, they see the same "not enabled for this server, contact …" message the commands give, and the Twitch sections are disabled.
 
 Streamers (`/streamerlist`, `/addstreamer`, `/deletestreamer`):
@@ -192,6 +193,7 @@ Every file under `data/` must keep loading after a deploy, with nothing lost and
   - Step 4 adds new `data/servers/<id>-problems.json` files. A missing file means no problems.
   - Step 5 adds a new global `data/system-log.jsonl`. A missing file means an empty log.
   - Step 7 adds optional `selfServiceRoles` and `selfServiceRemoveAfterDays` to server files, and optional `selfService`, `addedBy`, `selfServiceLostAt` and `channelOverridePinned` to streamers. Missing values mean: the feature is off, the expiry is 7 days, the streamer was added by an admin, and they're not paused or pinned.
+  - Step 19 adds optional `autoPublishChannels` to server files. A missing entry means auto-publish is on.
   - Step 8 adds optional `adminRoles` and `messageCustomizationRules` to server files, and `templateSetBy` to streamers. Missing means no extra admin roles and no non-admin customization, so nothing changes on production.
   - Step 9 adds an optional `superAdmins` key to `config.json`. If it's missing, there are no super admins.
   - Sessions and login tokens live in memory only.
@@ -393,6 +395,17 @@ Every file under `data/` must keep loading after a deploy, with nothing lost and
   
   Step 16 ships before this one, so its listener gets the audit call added here.
 - [ ] 18. **Docs:** update the README with the dashboard, who can access it (Administrator, admin roles, streamers), message permissions, the new commands (`/addadminrole`, `/removeadminrole`, `/addmessagerole`, `/removemessagerole`), the `/dashboard` command, self-service adding (`/settwitchchannel`, `/removetwitchchannel`, `/addselfservicerole`, `/removeselfservicerole`, and the role precedence rule), the requirement that the reverse proxy sends `X-Forwarded-Proto`, and the `superAdmins` config key. Update CLAUDE.md with the new classes.
+- [ ] 19. **Auto-publish in announcement channels, configurable per channel.** Live alerts posted in an announcement channel can be published automatically, so servers following that channel get them too. Admins choose this per channel. (A quick hard-coded version, always publishing, is running in production from the side branch `announcements-fix`. That branch is never merged; this step replaces it.)
+  - **Data:** `autoPublishChannels: {channelId: true/false}` in `ServerInfo`. It's additive. A missing entry means **on**, matching what production does after the hotfix, so deploying this step doesn't silently stop publishing.
+  - **Behaviour:** after a live alert is sent, if the channel is an announcement channel (`NewsChannel`) and auto-publish is on for it, call `message.crosspost()`. **Silent reposts** (the cooldown case) are never published, so followers aren't spammed. It applies to every channel live alerts can go to: the server default, streamer overrides, and self-service role channels. The setting is ignored for normal text channels.
+  - **Failures:** a failed publish is recorded in the server's problem log (step 4), with a friendly reason. Publishing your own messages only needs Send Messages; Discord also limits how many messages a channel can publish per hour.
+  - **Diagnose (step 6):** for each streamer whose channel is an announcement channel, show "will be published to followers" or "won't be published (auto-publish off)". If it's on, warn if the bot is missing Send Messages there.
+  - **`ServerSettings`:** `setAutoPublish(channel, on, actor)`, audited (step 3).
+  - **Command:** `/setautopublish channel: publish:` (admin-only by default). It rejects channels that aren't announcement channels.
+  - **API:** `GET …/settings` includes `autoPublishChannels`. `PATCH …/settings` accepts changes, checking that each channel belongs to the guild and is an announcement channel.
+  - **UI (admin settings):** an **Announcement channels** list showing every announcement channel live alerts can go to, each with an auto-publish toggle and the streamers that post there.
+  - **Tests:** default-on when missing, the silent repost isn't published, a text channel ignores the setting, and the v0 fixture still loads.
+  - **Docs:** add `/setautopublish` and the setting to the README.
 
 ### Manual test checklist (for the user, not run by agents)
 
@@ -403,7 +416,8 @@ These need real Discord accounts and roles, a Twitch streamer actually going liv
 - Remove the bot's Send Messages permission in the live channel with a channel override only, delete the live role, and move the live role above the bot's role. Check that each one shows up in Diagnose **without anyone going live**, and in the recorded failures after a live event.
 - Put a non-mentionable role and `@everyone` in a streamer's template without giving the bot Mention Everyone: Diagnose warns about both. Make the role mentionable: the role warning clears.
 - Give one streamer an override channel the bot can't see: only that streamer shows an error.
-- Point a streamer at an announcement channel: Diagnose flags it until the Known bugs fix lands, after which it posts. System health:
+- Point a streamer at an announcement channel: Diagnose flags it until the Known bugs fix lands, after which it posts.
+- Auto-publish: with a second server following the announcement channel, a live alert shows up there. Turn auto-publish off for that channel: the next alert stays local. A silent repost within the cooldown is never published. System health:
 - Put a wrong Twitch client secret in a copy of the config and check that Twitch API turns red with the reason and a super admin DM arrives. Restore it, and check that recovery is shown and DM'd.
 - Use an invalid Discord token: startup doesn't crash, the stdout recovery link works, and the System page shows Discord red with "fix and restart".
 - Disable the members intent in the dev portal and check that `DISALLOWED_INTENTS` is shown.
