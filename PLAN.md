@@ -304,7 +304,7 @@ Every file under `data/` must keep loading after a deploy, with nothing lost and
   **Result per check:** OK, warning (it posts, but something is degraded, e.g. a mention won't ping), or error (nothing will post). Each has a plain-English reason and a fix hint, e.g. "Give MorganaBot *Send Messages* in #live, or pick another channel". Results are grouped by streamer, with server-wide issues first.
   - Done notes: announcement channels pass the channel check (step 4 already fixed posting there). The Diagnose button, load and after-save runs in the dashboard are wired up with the API/UI (steps 11 and 13); for now the channel and live role commands append any problems with the new value to their reply. Twitch "disabled" notes are kept for 24 hours (`SubscriptionNotes`), and a subscription the sync couldn't create is reported too (error for go-live).
   — `2c4e8d7`
-- [ ] 7. **Self-service streamer adding (backend and commands).**
+- [x] 7. **Self-service streamer adding (backend and commands).**
   - **Data:** add to `ServerInfo`: `selfServiceRoles: List<{roleId, channelId}>` (missing = empty, which turns the feature off) and `selfServiceRemoveAfterDays` (default 7, 0 = never). Add to `Streamer`: `selfService`, `addedBy`, `selfServiceLostAt` and `channelOverridePinned`. All of them are additive.
   - **Intents:** enable `GUILD_MEMBERS` in `JDABuilder` with `MemberCachePolicy.ALL` and `ChunkingFilter.ALL`. That's fine for a private bot in fewer than 100 servers. JDA only fires role-change events for cached members.
   - **`ServerSettings`:**
@@ -322,6 +322,8 @@ Every file under `data/` must keep loading after a deploy, with nothing lost and
     
     Every other setting can be changed both by command and in the dashboard, so these can too.
   - **Diagnose:** add the self-service checks to step 6's Diagnose: roles exist, override channels pass the channel checks, the paused note, and which role the channel came from.
+  - Done notes: `SelfServiceListener` handles the member events on its own thread; the startup catch-up and expiry run in the Twitch watcher loop (first pass after Discord is ready, then hourly and on every `triggerUpdate`), right before the subscription sync, so no extra `triggerUpdate` is needed. Twitch-disabled servers are skipped by reconcile and expiry. A member who already had an admin-added entry keeps `selfService: false` when they run `/settwitchchannel` (Twitch account replaced, channel set from their role once, pin cleared), so admin-added entries are never paused. `ServerSettings.setSelfServiceRoles` (whole list, for the dashboard's `PUT …/self-service`) exists already. Audit entries got an optional `subject` value (the self-service role) and a `selfService` actor source. Saving a v0 server file now writes the new fields with their defaults; the fixture test allows exactly those keys.
+  — `3c503cb`
 - [ ] 8. **Access levels and message permissions (backend).**
   - **Data:** add `adminRoles: [roleId]` and `messageCustomizationRules: [{roleId, allowEveryone, allowedMentionRoles}]` to `ServerInfo`, and `templateSetBy` to `Streamer`. All of them are additive.
   - **`Access.of(member)`** returns `ADMIN`, `STREAMER` or `NONE`, as described in Who can use the dashboard, plus helpers:
