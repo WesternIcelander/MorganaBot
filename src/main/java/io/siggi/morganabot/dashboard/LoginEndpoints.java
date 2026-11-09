@@ -45,8 +45,7 @@ public class LoginEndpoints {
 
     void login(HTTPRequest request) throws Exception {
         request.allowedMethods("GET");
-        request.response.setHeader("Referrer-Policy", "no-referrer");
-        request.response.setHeader("Cache-Control", "no-store");
+        WebResponses.pageHeaders(request.response, "no-store");
         LoginTokenStore.Login login = tokens.redeem(request.get.get("token"));
         if (login == null) {
             sendPage(request, "400 Bad Request",
@@ -60,26 +59,17 @@ public class LoginEndpoints {
 
     void logout(HTTPRequest request) throws Exception {
         request.allowedMethods("POST");
-        request.response.setHeader("Cache-Control", "no-store");
-        request.response.setHeader("Referrer-Policy", "no-referrer");
+        WebResponses.apiHeaders(request.response);
         Session session = request.getSessionIfExists();
         DashboardSession login = DashboardSession.from(session, clock.getAsLong());
         if (login != null && !login.csrfMatches(request.getHeader(DashboardSession.CSRF_HEADER))) {
-            sendJson(request, "403 Forbidden", "{\"error\":\"Missing or wrong " + DashboardSession.CSRF_HEADER + " header\"}");
+            WebResponses.sendError(request, ApiError.csrf());
             return;
         }
         if (session != null) session.delete();
         request.response.addHeader("Set-Cookie", request.server.getSessionCookieName()
                 + "=; path=/; Max-Age=0; HttpOnly;" + (request.isSecure() ? " Secure;" : ""));
-        sendJson(request, "200 OK", "{\"ok\":true}");
-    }
-
-    private static void sendJson(HTTPRequest request, String status, String json) throws IOException {
-        byte[] body = json.getBytes(StandardCharsets.UTF_8);
-        request.response.setHeader(status);
-        request.response.setContentType("application/json; charset=utf-8");
-        request.response.contentLength(body.length);
-        request.response.write(body);
+        WebResponses.sendOk(request);
     }
 
     private static void sendPage(HTTPRequest request, String status, String message) throws IOException {

@@ -128,6 +128,14 @@ public class Access {
     }
 
     /**
+     * The level for a dashboard request. {@code superAdminSession} is the session's own super admin flag (set at
+     * login, e.g. by the console recovery link), which counts as well as the configured list.
+     */
+    public Level of(MemberView member, boolean superAdminSession) {
+        return level(store.get(member.guildId()), member, superAdminSession || isSuperAdmin(member.userId()));
+    }
+
+    /**
      * Only Discord Administrators and super admins may change the admin role list, so an admin through an admin role
      * can't add or remove admins.
      */
