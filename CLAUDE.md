@@ -34,6 +34,21 @@ Per-server data lives in per-server files under `data/servers/`, never in a shar
 ## Repo workflow
 
 - `CLAUDE.md` and `PLAN.md` live in `plan/`, a git worktree on the `plan` branch (separate history). The root-level files are symlinks. `plan/`, `CLAUDE.md`, `PLAN.md` are in `.git/info/exclude`.
-- When a PLAN item is done: commit the code on `main` first, then tick it off in `PLAN.md` with the main commit hash, and commit that in `plan/`.
-- Only `main` is pushed. **Never push `plan`.**
-- Don't sweep unrelated uncommitted changes (e.g. the user's own `pom.xml` edits) into commits — stage specific files.
+- When a PLAN step is done:
+  1. Commit the code on `main`.
+  2. In `PLAN.md`, tick the step (`- [x]`) and append the main commit hash.
+  3. **Also tick every Known bugs entry that says "Fixed by step N" for this step,** with the same hash.
+  4. Commit in `plan/`.
+  5. Push both: `git push origin main`, then `git -C plan push origin plan` (the first time: `git -C plan push -u origin plan`). The repo is public, and that's fine for the plan too.
+- If a step can't be finished, leave it unchecked, add an indented note under it saying why, and commit and push that note.
+- Don't sweep unrelated uncommitted changes (e.g. the user's own `pom.xml` edits) into commits. Stage specific files.
+
+## Verifying a step (for agents running PLAN steps)
+
+- `mvn package` must pass, and it runs the JUnit tests (set up in step 0). Add unit tests for the logic each step introduces: parsing, rules and precedence, validation, store and locking behaviour, loading old-format data. Extend the `server-v0.json` fixture test whenever a step adds stored fields.
+- You may run the bot locally with the dev token in `data/config.json` (it's a developer bot account, not production). You can also:
+  - send signed fake Twitch EventSub notifications to `http://localhost:<apiPort>/twitch-notification`, using `twitch.notificationSecret`
+  - read the dev bot's messages back over JDA/REST to check what it posted
+  - once step 5/9 exist, log into the dashboard with the console recovery login link
+- You can't act as a Discord user: no running slash commands, no changing your own roles, no real Twitch go-live. Those checks are in PLAN.md's **Manual test checklist**, which is the user's job; don't try to tick it.
+- Never touch production data. Use the dev `data/` directory or temporary copies.
