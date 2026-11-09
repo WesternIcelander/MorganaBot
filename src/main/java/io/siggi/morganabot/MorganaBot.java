@@ -2,6 +2,7 @@ package io.siggi.morganabot;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
+import io.siggi.morganabot.audit.AuditLog;
 import io.siggi.morganabot.config.AuthCache;
 import io.siggi.morganabot.config.Configuration;
 import io.siggi.morganabot.config.Data;
@@ -12,6 +13,11 @@ import io.siggi.processapi.ProcessAPI;
 import io.siggi.processapi.Signal;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.JDABuilder;
+import net.dv8tion.jda.api.entities.Guild;
+import net.dv8tion.jda.api.entities.Member;
+import net.dv8tion.jda.api.entities.Role;
+import net.dv8tion.jda.api.entities.User;
+import net.dv8tion.jda.api.entities.channel.middleman.GuildChannel;
 import net.dv8tion.jda.api.interactions.InteractionContextType;
 import net.dv8tion.jda.api.interactions.IntegrationType;
 import net.dv8tion.jda.api.interactions.commands.DefaultMemberPermissions;
@@ -54,6 +60,7 @@ public class MorganaBot {
     private AuthCache authCache;
     private ServerInfoStore serverInfoStore;
     private ServerSettings serverSettings;
+    private AuditLog auditLog;
 
     public Gson getGson() {
         return gson;
@@ -75,6 +82,63 @@ public class MorganaBot {
         return serverSettings;
     }
 
+    public AuditLog getAuditLog() {
+        return auditLog;
+    }
+
+    /**
+     * Names for audit entries, from the JDA cache (users fall back to a REST lookup) and the Twitch API.
+     */
+    private final class DiscordNames implements AuditLog.Names {
+        @Override
+        public String channel(long guildId, long channelId) {
+            Guild guild = guild(guildId);
+            GuildChannel channel = guild == null ? null : guild.getGuildChannelById(channelId);
+            return channel == null ? null : channel.getName();
+        }
+
+        @Override
+        public String role(long guildId, long roleId) {
+            Guild guild = guild(guildId);
+            Role role = guild == null ? null : guild.getRoleById(roleId);
+            return role == null ? null : role.getName();
+        }
+
+        @Override
+        public String user(long guildId, long userId) {
+            if (jda == null) return null;
+            User user = jda.getUserById(userId);
+            if (user == null) {
+                Guild guild = guild(guildId);
+                Member member = guild == null ? null : guild.getMemberById(userId);
+                if (member != null) user = member.getUser();
+            }
+            if (user == null) {
+                try {
+                    user = jda.retrieveUserById(userId).complete();
+                } catch (Exception e) {
+                    return null;
+                }
+            }
+            return user == null ? null : user.getName();
+        }
+
+        @Override
+        public String twitchLogin(String twitchId) {
+            if (twitchStreamerWatcher == null) return null;
+            try {
+                JsonObject user = twitchStreamerWatcher.getStreamerInfoById(twitchId);
+                return user == null ? null : user.get("login").getAsString();
+            } catch (Exception e) {
+                return null;
+            }
+        }
+
+        private Guild guild(long guildId) {
+            return jda == null ? null : jda.getGuildById(guildId);
+        }
+    }
+
     public UserData getUserData(long userId) {
         return Data.read(new File(Util.getDataRoot(), "users/" + userId + ".json"), UserData.class, gson);
     }
@@ -86,6 +150,7 @@ public class MorganaBot {
         configuration = Data.read(new File(Util.getDataRoot(), "config.json"), Configuration.class, gson);
         authCache = Data.read(new File(Util.getDataRoot(), "auth-cache.json"), AuthCache.class, gson);
         serverInfoStore = new ServerInfoStore(new File(Util.getDataRoot(), "servers"), gson);
+        auditLog = new AuditLog(new File(Util.getDataRoot(), "servers"), gson, serverInfoStore, new DiscordNames());
         serverSettings = new ServerSettings(serverInfoStore, new ServerSettings.Twitch() {
             @Override
             public ServerSettings.TwitchUser findUserByLogin(String login) throws IOException {
@@ -102,7 +167,7 @@ public class MorganaBot {
             public void triggerUpdate() {
                 twitchStreamerWatcher.triggerUpdate();
             }
-        });
+        }, auditLog);
         webHandler = new WebHandler(this);
         webHandler.start();
         JDABuilder builder = JDABuilder.createDefault(configuration.discord.token);

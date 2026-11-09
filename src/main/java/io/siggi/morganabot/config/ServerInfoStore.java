@@ -13,6 +13,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 /**
  * Keeps one cached {@link ServerInfo} per guild ({@code <dir>/<guildId>.json}), with a lock per guild.
@@ -94,6 +95,23 @@ public class ServerInfoStore {
                 entry.stamp = stamp(working.file);
             }
             return result;
+        } finally {
+            entry.lock.unlock();
+        }
+    }
+
+    /**
+     * Runs {@code fn} while holding the guild's lock, for other per-server files (e.g. the audit log) that must be
+     * written under the same lock. The lock is reentrant, but {@link #modify} must not be called from inside
+     * {@code fn}.
+     *
+     * @return whatever {@code fn} returns
+     */
+    public <T> T withLock(long guildId, Supplier<T> fn) {
+        Entry entry = entry(guildId);
+        entry.lock.lock();
+        try {
+            return fn.get();
         } finally {
             entry.lock.unlock();
         }

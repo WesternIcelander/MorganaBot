@@ -1,5 +1,9 @@
 package io.siggi.morganabot;
 
+import io.siggi.morganabot.audit.Actor;
+import io.siggi.morganabot.audit.AuditEntry;
+import io.siggi.morganabot.audit.AuditEntry.Value;
+import io.siggi.morganabot.audit.AuditLog;
 import io.siggi.morganabot.config.ServerInfo;
 import io.siggi.morganabot.config.ServerInfoStore;
 
@@ -9,6 +13,9 @@ import java.util.regex.Pattern;
 /**
  * All validation and changes of per-server settings. Commands (and later the dashboard) only parse their input and
  * call this; nothing else should change server settings directly.
+ * <p>
+ * Every change is recorded in the server's {@link AuditLog}, attributed to the {@link Actor} passed in (who made it, and
+ * from where). Setting something to the value it already has records nothing.
  * <p>
  * Every method that fails for a reason the user can fix throws {@link SettingsException}, whose message is meant to
  * be shown to the user as is. Twitch lookups happen before the server lock is taken, since they call the Twitch API.
@@ -61,10 +68,12 @@ public class ServerSettings {
 
     private final ServerInfoStore store;
     private final Twitch twitch;
+    private final AuditLog auditLog;
 
-    public ServerSettings(ServerInfoStore store, Twitch twitch) {
+    public ServerSettings(ServerInfoStore store, Twitch twitch, AuditLog auditLog) {
         this.store = store;
         this.twitch = twitch;
+        this.auditLog = auditLog;
     }
 
     /**
@@ -86,12 +95,12 @@ public class ServerSettings {
      * @param channelId     the channel override, or 0 for the server default
      * @return the Twitch user that was added
      */
-    public TwitchUser addStreamer(long guildId, String twitchName, long discordUserId, long channelId) throws SettingsException, IOException {
+    public TwitchUser addStreamer(Actor actor, long guildId, String twitchName, long discordUserId, long channelId) throws SettingsException, IOException {
         requireTwitchEnabled(guildId);
         validateId(discordUserId, "Discord user");
         validateId(channelId, "channel");
         TwitchUser user = lookUpTwitchUser(twitchName);
-        modify(guildId, serverInfo -> {
+        modify(actor, guildId, AuditEntry.STREAMER_ADD, (serverInfo, audit) -> {
             for (ServerInfo.Streamer streamer : serverInfo.streamers) {
                 if (user.id().equals(streamer.twitchId)) {
                     throw new SettingsException("The specified Twitch user is already added as a streamer!");
@@ -102,6 +111,9 @@ public class ServerSettings {
             ServerInfo.Streamer streamer = new ServerInfo.Streamer(discordUserId, user.id());
             streamer.channelToPostLiveNotifications = channelId;
             serverInfo.streamers.add(streamer);
+            audit.streamer = Value.twitch(user.id(), user.login());
+            audit.change("twitch", null, Value.twitch(user.id(), user.login()));
+            auditStreamerFields(audit, null, streamer);
             return null;
         });
         twitch.triggerUpdate();
@@ -113,12 +125,15 @@ public class ServerSettings {
      *
      * @return a copy of the removed entry
      */
-    public ServerInfo.Streamer deleteStreamer(long guildId, StreamerRef ref) throws SettingsException, IOException {
+    public ServerInfo.Streamer deleteStreamer(Actor actor, long guildId, StreamerRef ref) throws SettingsException, IOException {
         requireTwitchEnabled(guildId);
-        String twitchId = resolveTwitchId(ref);
-        ServerInfo.Streamer removed = modify(guildId, serverInfo -> {
-            ServerInfo.Streamer streamer = findStreamer(serverInfo, ref, twitchId);
+        TwitchUser user = resolveTwitchUser(ref);
+        ServerInfo.Streamer removed = modify(actor, guildId, AuditEntry.STREAMER_REMOVE, (serverInfo, audit) -> {
+            ServerInfo.Streamer streamer = findStreamer(serverInfo, ref, user);
             serverInfo.streamers.remove(streamer);
+            audit.streamer = streamerValue(streamer, user);
+            audit.change("twitch", streamerValue(streamer, user), null);
+            auditStreamerFields(audit, streamer, null);
             return copyOf(streamer);
         });
         twitch.triggerUpdate();
@@ -130,12 +145,14 @@ public class ServerSettings {
      *
      * @return a copy of the changed entry
      */
-    public ServerInfo.Streamer setChannelOverride(long guildId, StreamerRef ref, long channelId) throws SettingsException, IOException {
+    public ServerInfo.Streamer setChannelOverride(Actor actor, long guildId, StreamerRef ref, long channelId) throws SettingsException, IOException {
         requireTwitchEnabled(guildId);
         validateId(channelId, "channel");
-        String twitchId = resolveTwitchId(ref);
-        return modify(guildId, serverInfo -> {
-            ServerInfo.Streamer streamer = findStreamer(serverInfo, ref, twitchId);
+        TwitchUser user = resolveTwitchUser(ref);
+        return modify(actor, guildId, AuditEntry.STREAMER_CHANNEL_OVERRIDE, (serverInfo, audit) -> {
+            ServerInfo.Streamer streamer = findStreamer(serverInfo, ref, user);
+            audit.streamer = streamerValue(streamer, user);
+            audit.change("channel", Value.channel(streamer.channelToPostLiveNotifications), Value.channel(channelId));
             streamer.channelToPostLiveNotifications = channelId;
             return copyOf(streamer);
         });
@@ -146,12 +163,12 @@ public class ServerSettings {
      *
      * @return a copy of the changed entry
      */
-    public ServerInfo.Streamer setStreamerDiscordUser(long guildId, StreamerRef ref, long discordUserId) throws SettingsException, IOException {
+    public ServerInfo.Streamer setStreamerDiscordUser(Actor actor, long guildId, StreamerRef ref, long discordUserId) throws SettingsException, IOException {
         requireTwitchEnabled(guildId);
         validateId(discordUserId, "Discord user");
-        String twitchId = resolveTwitchId(ref);
-        return modify(guildId, serverInfo -> {
-            ServerInfo.Streamer streamer = findStreamer(serverInfo, ref, twitchId);
+        TwitchUser user = resolveTwitchUser(ref);
+        return modify(actor, guildId, AuditEntry.STREAMER_DISCORD_USER, (serverInfo, audit) -> {
+            ServerInfo.Streamer streamer = findStreamer(serverInfo, ref, user);
             if (discordUserId != 0L) {
                 for (ServerInfo.Streamer other : serverInfo.streamers) {
                     if (other != streamer && other.discordId == discordUserId) {
@@ -159,6 +176,8 @@ public class ServerSettings {
                     }
                 }
             }
+            audit.streamer = streamerValue(streamer, user);
+            audit.change("discordUser", Value.user(streamer.discordId), Value.user(discordUserId));
             streamer.discordId = discordUserId;
             return copyOf(streamer);
         });
@@ -167,10 +186,11 @@ public class ServerSettings {
     /**
      * Sets or clears (0) the role given to streamers while they're live.
      */
-    public void setLiveRole(long guildId, long roleId) throws SettingsException {
+    public void setLiveRole(Actor actor, long guildId, long roleId) throws SettingsException {
         requireTwitchEnabled(guildId);
         validateId(roleId, "role");
-        modify(guildId, serverInfo -> {
+        modify(actor, guildId, AuditEntry.LIVE_ROLE, (serverInfo, audit) -> {
+            audit.change("role", Value.role(serverInfo.roleForLiveUsers), Value.role(roleId));
             serverInfo.roleForLiveUsers = roleId;
             return null;
         });
@@ -179,18 +199,20 @@ public class ServerSettings {
     /**
      * Sets or clears (0) the server's default live notification channel.
      */
-    public void setLiveChannel(long guildId, long channelId) throws SettingsException {
+    public void setLiveChannel(Actor actor, long guildId, long channelId) throws SettingsException {
         requireTwitchEnabled(guildId);
         validateId(channelId, "channel");
-        modify(guildId, serverInfo -> {
+        modify(actor, guildId, AuditEntry.LIVE_CHANNEL, (serverInfo, audit) -> {
+            audit.change("channel", Value.channel(serverInfo.channelToPostLiveNotifications), Value.channel(channelId));
             serverInfo.channelToPostLiveNotifications = channelId;
             return null;
         });
     }
 
-    public void setDeleteOnOffline(long guildId, boolean delete) throws SettingsException {
+    public void setDeleteOnOffline(Actor actor, long guildId, boolean delete) throws SettingsException {
         requireTwitchEnabled(guildId);
-        modify(guildId, serverInfo -> {
+        modify(actor, guildId, AuditEntry.DELETE_ON_OFFLINE, (serverInfo, audit) -> {
+            audit.change("deleteOnOffline", Value.bool(serverInfo.deleteNotificationsOnOffline), Value.bool(delete));
             serverInfo.deleteNotificationsOnOffline = delete;
             return null;
         });
@@ -199,12 +221,13 @@ public class ServerSettings {
     /**
      * Sets the minimum time between two live notifications for the same streamer.
      */
-    public void setNotificationCooldown(long guildId, long cooldownMillis) throws SettingsException {
+    public void setNotificationCooldown(Actor actor, long guildId, long cooldownMillis) throws SettingsException {
         requireTwitchEnabled(guildId);
         if (cooldownMillis < 0L) {
             throw new SettingsException("The notification cooldown can't be negative.");
         }
-        modify(guildId, serverInfo -> {
+        modify(actor, guildId, AuditEntry.NOTIFICATION_COOLDOWN, (serverInfo, audit) -> {
+            audit.change("cooldownMillis", Value.number(serverInfo.streamNotificationCooldown), Value.number(cooldownMillis));
             serverInfo.streamNotificationCooldown = cooldownMillis;
             return null;
         });
@@ -213,10 +236,11 @@ public class ServerSettings {
     /**
      * Sets the server-wide live message template, or resets it to the built-in default (null).
      */
-    public void setServerTemplate(long guildId, String template) throws SettingsException {
+    public void setServerTemplate(Actor actor, long guildId, String template) throws SettingsException {
         requireTwitchEnabled(guildId);
         String value = normalizeTemplate(template);
-        modify(guildId, serverInfo -> {
+        modify(actor, guildId, AuditEntry.SERVER_TEMPLATE, (serverInfo, audit) -> {
+            audit.change("template", Value.text(serverInfo.liveNotificationTemplate), Value.text(value));
             serverInfo.liveNotificationTemplate = value;
             return null;
         });
@@ -227,15 +251,42 @@ public class ServerSettings {
      *
      * @return a copy of the changed entry
      */
-    public ServerInfo.Streamer setStreamerTemplate(long guildId, StreamerRef ref, String template) throws SettingsException, IOException {
+    public ServerInfo.Streamer setStreamerTemplate(Actor actor, long guildId, StreamerRef ref, String template) throws SettingsException, IOException {
         requireTwitchEnabled(guildId);
         String value = normalizeTemplate(template);
-        String twitchId = resolveTwitchId(ref);
-        return modify(guildId, serverInfo -> {
-            ServerInfo.Streamer streamer = findStreamer(serverInfo, ref, twitchId);
+        TwitchUser user = resolveTwitchUser(ref);
+        return modify(actor, guildId, AuditEntry.STREAMER_TEMPLATE, (serverInfo, audit) -> {
+            ServerInfo.Streamer streamer = findStreamer(serverInfo, ref, user);
+            audit.streamer = streamerValue(streamer, user);
+            audit.change("template", Value.text(streamer.liveNotificationTemplate), Value.text(value));
             streamer.liveNotificationTemplate = value;
             return copyOf(streamer);
         });
+    }
+
+    /**
+     * Records the settings of a streamer entry as old → new: {@code before} null for an added streamer, {@code after}
+     * null for a removed one.
+     */
+    private static void auditStreamerFields(AuditEntry audit, ServerInfo.Streamer before, ServerInfo.Streamer after) {
+        audit.change("discordUser",
+                before == null ? null : Value.user(before.discordId),
+                after == null ? null : Value.user(after.discordId));
+        audit.change("channel",
+                before == null ? null : Value.channel(before.channelToPostLiveNotifications),
+                after == null ? null : Value.channel(after.channelToPostLiveNotifications));
+        audit.change("template",
+                before == null ? null : Value.text(before.liveNotificationTemplate),
+                after == null ? null : Value.text(after.liveNotificationTemplate));
+    }
+
+    /**
+     * The Twitch account of {@code streamer}, with its login if the command gave the Twitch name. Otherwise the login
+     * is looked up when the entry is recorded.
+     */
+    private static Value streamerValue(ServerInfo.Streamer streamer, TwitchUser user) {
+        String login = user != null && user.id().equals(streamer.twitchId) ? user.login() : null;
+        return Value.twitch(streamer.twitchId, login);
     }
 
     // --- helpers ---
@@ -270,15 +321,19 @@ public class ServerSettings {
     }
 
     /**
-     * Turns the Twitch name in {@code ref} into a Twitch ID, or returns null if no Twitch name was given.
+     * Looks up the Twitch user named in {@code ref}, or returns null if no Twitch name was given.
      */
-    private String resolveTwitchId(StreamerRef ref) throws SettingsException, IOException {
+    private TwitchUser resolveTwitchUser(StreamerRef ref) throws SettingsException, IOException {
         if (ref == null || ref.isEmpty()) {
             throw new SettingsException("You need to specify either their Twitch name or Discord name!");
         }
         validateId(ref.discordUserId(), "Discord user");
         if (ref.twitchName() == null) return null;
-        return lookUpTwitchUser(ref.twitchName()).id();
+        return lookUpTwitchUser(ref.twitchName());
+    }
+
+    private static ServerInfo.Streamer findStreamer(ServerInfo serverInfo, StreamerRef ref, TwitchUser user) throws SettingsException {
+        return findStreamer(serverInfo, ref, user == null ? null : user.id());
     }
 
     /**
@@ -315,21 +370,30 @@ public class ServerSettings {
 
     @FunctionalInterface
     private interface Change<T> {
-        T apply(ServerInfo serverInfo) throws SettingsException;
+        /**
+         * Changes {@code serverInfo} and records what changed in {@code audit}.
+         */
+        T apply(ServerInfo serverInfo, AuditEntry audit) throws SettingsException;
     }
 
     /**
      * Runs {@code change} under the guild's lock. Twitch tracking is checked again inside the lock, so a server that
-     * was switched off in the meantime isn't changed. A thrown {@link SettingsException} leaves the file unchanged.
+     * was switched off in the meantime isn't changed. A thrown {@link SettingsException} leaves the file unchanged
+     * and records nothing. Otherwise, if anything actually changed, an audit entry of type {@code type} is recorded
+     * for {@code actor} once the change is saved.
      */
-    private <T> T modify(long guildId, Change<T> change) throws SettingsException {
+    private <T> T modify(Actor actor, long guildId, String type, Change<T> change) throws SettingsException {
+        if (actor == null) throw new IllegalArgumentException("actor is required");
+        AuditEntry audit = new AuditEntry(type);
+        T result;
         try {
-            return store.modify(guildId, serverInfo -> {
+            result = store.modify(guildId, serverInfo -> {
                 try {
                     if (!serverInfo.enabledTwitchTracking) {
                         throw new SettingsException(NOT_ENABLED);
                     }
-                    return change.apply(serverInfo);
+                    audit.time = System.currentTimeMillis();
+                    return change.apply(serverInfo, audit);
                 } catch (SettingsException e) {
                     throw new WrappedSettingsException(e);
                 }
@@ -337,6 +401,10 @@ public class ServerSettings {
         } catch (WrappedSettingsException e) {
             throw (SettingsException) e.getCause();
         }
+        if (audit.hasChanges()) {
+            auditLog.record(guildId, actor, audit);
+        }
+        return result;
     }
 
     private static final class WrappedSettingsException extends RuntimeException {

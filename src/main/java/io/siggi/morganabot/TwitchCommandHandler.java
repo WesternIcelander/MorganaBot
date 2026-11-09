@@ -3,6 +3,7 @@ package io.siggi.morganabot;
 import com.google.gson.JsonObject;
 import io.siggi.morganabot.ServerSettings.SettingsException;
 import io.siggi.morganabot.ServerSettings.StreamerRef;
+import io.siggi.morganabot.audit.Actor;
 import io.siggi.morganabot.config.ServerInfo;
 import io.siggi.morganabot.util.Util;
 import net.dv8tion.jda.api.entities.User;
@@ -50,7 +51,7 @@ public class TwitchCommandHandler {
             String twitchName = getString(event, "twitch-name");
             long discordUserId = getUserId(event, "discord-name");
             long channelId = getChannelId(event, "post-in-channel");
-            ServerSettings.TwitchUser user = bot.getServerSettings().addStreamer(guildId, twitchName, discordUserId, channelId);
+            ServerSettings.TwitchUser user = bot.getServerSettings().addStreamer(actor(event), guildId, twitchName, discordUserId, channelId);
             return "Added " + Util.markdownEscape(user.displayName())
                     + (discordUserId != 0L ? " / <@" + discordUserId + ">" : "")
                     + " as a Twitch streamer"
@@ -61,7 +62,7 @@ public class TwitchCommandHandler {
     static void deleteStreamer(MorganaBot bot, SlashCommandInteractionEvent event) {
         handle(event, () -> {
             long guildId = event.getGuild().getIdLong();
-            ServerInfo.Streamer removed = bot.getServerSettings().deleteStreamer(guildId, getStreamerRef(event));
+            ServerInfo.Streamer removed = bot.getServerSettings().deleteStreamer(actor(event), guildId, getStreamerRef(event));
             return "Deleted " + describe(removed, event);
         });
     }
@@ -70,7 +71,7 @@ public class TwitchCommandHandler {
         handle(event, () -> {
             long guildId = event.getGuild().getIdLong();
             long channelId = getChannelId(event, "channel");
-            ServerInfo.Streamer streamer = bot.getServerSettings().setChannelOverride(guildId, getStreamerRef(event), channelId);
+            ServerInfo.Streamer streamer = bot.getServerSettings().setChannelOverride(actor(event), guildId, getStreamerRef(event), channelId);
             if (channelId == 0L) {
                 return "Removed override for " + describe(streamer, event);
             } else {
@@ -83,7 +84,7 @@ public class TwitchCommandHandler {
         handle(event, () -> {
             OptionMapping roleMapping = event.getOption("role");
             long roleId = roleMapping == null ? 0L : roleMapping.getAsRole().getIdLong();
-            bot.getServerSettings().setLiveRole(event.getGuild().getIdLong(), roleId);
+            bot.getServerSettings().setLiveRole(actor(event), event.getGuild().getIdLong(), roleId);
             return "Streamer role was set to <@&" + roleId + ">";
         });
     }
@@ -91,7 +92,7 @@ public class TwitchCommandHandler {
     static void setLiveChannel(MorganaBot bot, SlashCommandInteractionEvent event) {
         handle(event, () -> {
             long channelId = getChannelId(event, "channel");
-            bot.getServerSettings().setLiveChannel(event.getGuild().getIdLong(), channelId);
+            bot.getServerSettings().setLiveChannel(actor(event), event.getGuild().getIdLong(), channelId);
             return "Live channel was set to <#" + channelId + ">";
         });
     }
@@ -103,7 +104,7 @@ public class TwitchCommandHandler {
                 return "You need to choose whether to delete notifications!";
             }
             boolean delete = deleteMapping.getAsBoolean();
-            bot.getServerSettings().setDeleteOnOffline(event.getGuild().getIdLong(), delete);
+            bot.getServerSettings().setDeleteOnOffline(actor(event), event.getGuild().getIdLong(), delete);
             return "Set delete notifications on offline: " + delete;
         });
     }
@@ -122,10 +123,10 @@ public class TwitchCommandHandler {
                 }
             }
             if (discordUserId != 0L) {
-                bot.getServerSettings().setStreamerTemplate(guildId, new StreamerRef(null, discordUserId), message);
+                bot.getServerSettings().setStreamerTemplate(actor(event), guildId, new StreamerRef(null, discordUserId), message);
                 return "Updated user-specific notification template for <@" + discordUserId + ">!";
             } else {
-                bot.getServerSettings().setServerTemplate(guildId, message);
+                bot.getServerSettings().setServerTemplate(actor(event), guildId, message);
                 return "Updated server-wide notification template!";
             }
         });
@@ -192,6 +193,14 @@ public class TwitchCommandHandler {
     }
 
     // --- option parsing ---
+
+    /**
+     * The member who ran the command, for the audit log.
+     */
+    private static Actor actor(SlashCommandInteractionEvent event) {
+        User user = event.getUser();
+        return Actor.command(user.getIdLong(), user.getName(), event.getName());
+    }
 
     private static StreamerRef getStreamerRef(SlashCommandInteractionEvent event) {
         return new StreamerRef(getString(event, "twitch-name"), getUserId(event, "discord-name"));
