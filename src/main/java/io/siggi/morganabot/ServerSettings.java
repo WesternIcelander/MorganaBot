@@ -487,11 +487,21 @@ public class ServerSettings {
         } catch (Exception e) {
             log.println("[Super admin] " + who(byUser, byName) + " tried to remove the bot from " + where(guildId, name)
                     + (block ? " (blocked)" : "") + reasonText(note) + ", but leaving failed: " + e);
-            if (block) twitch.triggerUpdate();
+            if (block) {
+                twitch.triggerUpdate();
+                AuditEntry entry = serverEntry(AuditEntry.SERVER_BLOCK, guildId, name, note)
+                        .change("blocked", Value.bool(false), Value.bool(true));
+                entry.note = (note == null ? "" : note + " ") + "(Leaving failed: "
+                        + (e.getMessage() == null ? e.toString() : e.getMessage()) + ")";
+                auditLog.record(guildId, Actor.superAdmin(byUser, byName), entry);
+            }
             throw new SettingsException("Couldn't leave the server: " + (e.getMessage() == null ? e.toString() : e.getMessage())
                     + (block ? " The block is saved, so the bot leaves when it next starts or is added again." : ""));
         }
         twitch.triggerUpdate();
+        AuditEntry entry = serverEntry(AuditEntry.SERVER_REMOVE, guildId, name, note);
+        if (block) entry.change("blocked", Value.bool(false), Value.bool(true));
+        auditLog.record(guildId, Actor.superAdmin(byUser, byName), entry);
         log.println("[Super admin] " + who(byUser, byName) + " removed the bot from " + where(guildId, name)
                 + (block ? " and blocked it from adding the bot back" : "") + reasonText(note));
         return new LeaveResult(name, block);
@@ -510,7 +520,12 @@ public class ServerSettings {
             return was;
         });
         if (lifted != null) {
-            log.println("[Super admin] " + who(byUser, guilds.userName(byUser)) + " unblocked " + where(guildId, lifted.name()));
+            String byName = guilds.userName(byUser);
+            AuditEntry entry = serverEntry(AuditEntry.SERVER_UNBLOCK, guildId, lifted.name(), null)
+                    .change("blocked", Value.bool(true), Value.bool(false));
+            if (lifted.reason() != null) entry.note = "Was blocked for: " + lifted.reason();
+            auditLog.record(guildId, Actor.superAdmin(byUser, byName), entry);
+            log.println("[Super admin] " + who(byUser, byName) + " unblocked " + where(guildId, lifted.name()));
         }
         return lifted;
     }
@@ -543,6 +558,15 @@ public class ServerSettings {
         } catch (RuntimeException e) {
             return false;
         }
+    }
+
+    /** A super-admin-only entry about the server itself. */
+    private AuditEntry serverEntry(String type, long guildId, String name, String note) {
+        AuditEntry entry = new AuditEntry(type).superAdminOnly();
+        entry.time = clock.getAsLong();
+        entry.subject = Value.server(guildId, name);
+        entry.note = note;
+        return entry;
     }
 
     private static BlockedServer blockedServer(long guildId, ServerInfo info) {

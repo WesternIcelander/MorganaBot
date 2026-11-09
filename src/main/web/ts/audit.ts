@@ -2,7 +2,9 @@
 // made the change, paged with "Load more".
 
 import type { AuditEntry, AuditPage } from "./api.js";
-import { actorsOf, actorText, AUDIT_TYPES, changeText, isTemplate, typeLabel, valueText } from "./audit-text.js";
+import {
+    actorsOf, actorText, attemptsText, AUDIT_TYPES, changeText, factText, isTemplate, SUPER_ADMIN_AUDIT_TYPES, typeLabel, valueText,
+} from "./audit-text.js";
 import { badge } from "./admin-ui.js";
 import { busy, errorMessage, formatTime, h, replace, type Child } from "./dom.js";
 import { api } from "./http.js";
@@ -17,9 +19,7 @@ export const auditPage: Page = {
 
 async function renderAuditPage(root: HTMLElement, context: PageContext): Promise<void> {
     const path = guildPath(context.guild) + "/audit";
-    const typeSelect = h("select", { id: "audit-type" },
-        h("option", { value: "" }, "All settings"),
-        Object.entries(AUDIT_TYPES).map(([value, label]) => h("option", { value }, label)));
+    const typeSelect = auditTypeSelect("audit-type", "All settings", context.me.superAdmin);
     const userSelect = h("select", { id: "audit-user" }, h("option", { value: "" }, "Anyone"));
     const people = new Map<string, string>();
     const list = h("ol", { class: "audit-list" });
@@ -102,10 +102,25 @@ async function renderAuditPage(root: HTMLElement, context: PageContext): Promise
     show(first, false);
 }
 
-function entryItem(entry: AuditEntry): HTMLElement {
+/** The "Setting"/"Event" filter: every entry type, plus the super-admin-only ones in their own group if asked. */
+export function auditTypeSelect(id: string, all: string, superAdmin: boolean): HTMLSelectElement {
+    return h("select", { id },
+        h("option", { value: "" }, all),
+        superAdmin
+            ? [h("optgroup", { label: "Settings" }, Object.entries(AUDIT_TYPES).map(([value, label]) => h("option", { value }, label))),
+                h("optgroup", { label: "Bot admins only" }, Object.entries(SUPER_ADMIN_AUDIT_TYPES).map(([value, label]) => h("option", { value }, label)))]
+            : Object.entries(AUDIT_TYPES).map(([value, label]) => h("option", { value }, label)));
+}
+
+/**
+ * One entry as a list item. `server` (the merged super admin view) is shown before the time.
+ */
+export function entryItem(entry: AuditEntry, server: Child = null): HTMLElement {
     const about: Child[] = [];
     if ((entry.streamer ?? null) !== null) about.push(" · ", valueText(entry.streamer));
-    if ((entry.subject ?? null) !== null) about.push(" · ", valueText(entry.subject));
+    // The merged view already names the server on the next line.
+    const subject = entry.subject ?? null;
+    if (subject !== null && !(server !== null && subject.kind === "server")) about.push(" · ", valueText(subject));
     const changes: Child[] = [];
     for (const change of entry.changes ?? []) {
         if (isTemplate(change)) {
@@ -117,13 +132,19 @@ function entryItem(entry: AuditEntry): HTMLElement {
             changes.push(h("li", null, changeText(change, entry.type)));
         }
     }
+    const facts = entry.facts ?? [];
+    const attempts = attemptsText(entry);
     return h("li", { class: "audit-entry" + (entry.actor?.source === "superAdmin" ? " by-bot-admin" : "") },
         h("div", { class: "audit-head" },
             h("strong", null, typeLabel(entry.type)),
             about,
             entry.visibility === "superAdmin" ? [" ", badge("warn", "Bot admins only")] : null),
-        h("div", { class: "muted small" }, formatTime(entry.time), " · ", actorText(entry.actor)),
+        h("div", { class: "muted small" }, server !== null ? [server, " · "] : null, formatTime(entry.time), " · ", actorText(entry.actor)),
+        attempts !== null
+            ? h("div", { class: "small" }, attempts + ", first " + formatTime(entry.firstTime ?? entry.time) + ", last " + formatTime(entry.time))
+            : null,
         changes.length > 0 ? h("ul", { class: "changes" }, changes) : null,
+        facts.length > 0 ? h("ul", { class: "changes" }, facts.map((fact) => h("li", null, factText(fact)))) : null,
         (entry.note ?? null) !== null ? h("p", { class: "hint" }, entry.note) : null);
 }
 

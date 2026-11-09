@@ -16,8 +16,12 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Per-server audit log: {@code <dir>/<guildId>-audit.jsonl}, one JSON {@link AuditEntry} per line, oldest first.
@@ -29,6 +33,23 @@ import java.util.UUID;
 public class AuditLog {
 
     public static final int MAX_ENTRIES = 1000;
+    /**
+     * Repeated {@link AuditEntry#BLOCKED_JOIN} attempts from the same server are combined into one entry while each
+     * comes within this long of the previous one.
+     */
+    public static final long JOIN_COMBINE_WINDOW = 60L * 60L * 1000L;
+
+    private static final Pattern AUDIT_FILE = Pattern.compile("([0-9]{1,19})-audit\\.jsonl");
+
+    /** Entry types that end a run of combined join attempts (the block changed in between). */
+    private static final Set<String> BLOCK_CHANGES = Set.of(AuditEntry.SERVER_REMOVE, AuditEntry.SERVER_BLOCK,
+            AuditEntry.SERVER_UNBLOCK);
+
+    /**
+     * An entry from the merged view, with the server it belongs to.
+     */
+    public record GuildEntry(long guildId, AuditEntry entry) {
+    }
 
     /**
      * Looks up names for IDs at the time an entry is recorded. Each method returns null if the name isn't known.
@@ -105,9 +126,71 @@ public class AuditLog {
             System.err.println("Could not write audit entry for guild " + guildId + ": " + gson.toJson(entry));
             Health.saveFailed(getFile(guildId), e);
         }
-        if (actor != null && actor.source == Actor.Source.SUPER_ADMIN) {
+        // Super-admin-only entries (removing, blocking) print their own log line where they happen.
+        if (actor != null && actor.source == Actor.Source.SUPER_ADMIN && !entry.isSuperAdminOnly()) {
             System.out.println("Super admin change in guild " + guildId + " by " + actor + ": " + describe(entry));
         }
+    }
+
+    /**
+     * Like {@link #record}, but if the guild's latest entry of the same type is from within {@code window} (and the
+     * block wasn't changed since), that entry is replaced by this one, with {@link AuditEntry#count} one higher and
+     * {@link AuditEntry#firstTime} kept. The combined entry moves to the end of the file, so the order stays by time.
+     */
+    public void recordCombined(long guildId, Actor actor, AuditEntry entry, long window) {
+        entry.actor = actor;
+        if (entry.time == 0L) entry.time = System.currentTimeMillis();
+        fillNames(guildId, entry);
+        try {
+            store.withLock(guildId, () -> {
+                try {
+                    combineLocked(guildId, entry, window);
+                    return null;
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                }
+            });
+        } catch (Exception e) {
+            System.err.println("Could not write audit entry for guild " + guildId + ": " + gson.toJson(entry));
+            Health.saveFailed(getFile(guildId), e);
+        }
+    }
+
+    private void combineLocked(long guildId, AuditEntry entry, long window) throws IOException {
+        File file = getFile(guildId);
+        List<String> lines = new ArrayList<>(readLines(file));
+        lines.removeIf(String::isBlank);
+        int found = -1;
+        AuditEntry previous = null;
+        for (int i = lines.size() - 1; i >= 0; i--) {
+            AuditEntry e = parse(lines.get(i));
+            if (e == null) continue;
+            if (e.time < entry.time - window) break;
+            if (BLOCK_CHANGES.contains(e.type)) break;
+            if (entry.type.equals(e.type)) {
+                found = i;
+                previous = e;
+                break;
+            }
+        }
+        if (previous == null) {
+            entry.count = null;
+            entry.firstTime = null;
+            String line = gson.toJson(entry) + "\n";
+            File parent = file.getParentFile();
+            if (parent != null && !parent.exists()) parent.mkdirs();
+            if (endsWithoutNewline(file)) line(file, "\n");
+            line(file, line);
+            trim(file);
+        } else {
+            entry.count = previous.times() + 1;
+            entry.firstTime = previous.firstTime != null ? previous.firstTime : previous.time;
+            lines.remove(found);
+            lines.add(gson.toJson(entry));
+            if (lines.size() > maxEntries) lines = lines.subList(lines.size() - maxEntries, lines.size());
+            replace(file, lines);
+        }
+        Health.saved(file);
     }
 
     /**
@@ -152,6 +235,48 @@ public class AuditLog {
         return entries;
     }
 
+    /**
+     * The IDs of every server with an audit file, including servers the bot has left.
+     */
+    public List<Long> guildIds() {
+        List<Long> ids = new ArrayList<>();
+        File[] files = directory.listFiles();
+        if (files == null) return ids;
+        for (File file : files) {
+            Matcher matcher = AUDIT_FILE.matcher(file.getName());
+            if (!matcher.matches() || !file.isFile()) continue;
+            try {
+                ids.add(Long.parseLong(matcher.group(1)));
+            } catch (NumberFormatException ignored) {
+                // Too long to be a snowflake.
+            }
+        }
+        ids.sort(null);
+        return ids;
+    }
+
+    /**
+     * Every server's entries merged, newest first (for the super admin audit page). Each file is read under its own
+     * server's lock; one that can't be read is skipped.
+     *
+     * @param includeSuperAdminOnly whether to include entries only super admins may see
+     */
+    public List<GuildEntry> readAll(boolean includeSuperAdminOnly) {
+        List<GuildEntry> all = new ArrayList<>();
+        for (long guildId : guildIds()) {
+            List<AuditEntry> entries;
+            try {
+                entries = read(guildId, includeSuperAdminOnly);
+            } catch (RuntimeException e) {
+                continue;
+            }
+            for (AuditEntry entry : entries) all.add(new GuildEntry(guildId, entry));
+        }
+        // Stable, so entries with the same time keep their order within a server.
+        all.sort(Comparator.comparingLong((GuildEntry g) -> g.entry().time).reversed());
+        return all;
+    }
+
     // --- helpers ---
 
     private AuditEntry parse(String line) {
@@ -170,6 +295,9 @@ public class AuditLog {
     private void fillNames(long guildId, AuditEntry entry) {
         fillName(guildId, entry.streamer);
         fillName(guildId, entry.subject);
+        if (entry.facts != null) {
+            for (AuditEntry.Fact fact : entry.facts) fillName(guildId, fact.value);
+        }
         for (AuditEntry.Change change : entry.changes) {
             fillName(guildId, change.oldValue);
             fillName(guildId, change.newValue);
@@ -233,7 +361,15 @@ public class AuditLog {
         List<String> lines = new ArrayList<>(readLines(file));
         lines.removeIf(String::isBlank);
         if (lines.size() <= maxEntries) return;
-        List<String> kept = lines.subList(lines.size() - maxEntries, lines.size());
+        replace(file, lines.subList(lines.size() - maxEntries, lines.size()));
+    }
+
+    /**
+     * Replaces the file's lines atomically.
+     */
+    private static void replace(File file, List<String> kept) throws IOException {
+        File parent = file.getParentFile();
+        if (parent != null && !parent.exists()) parent.mkdirs();
         File tmp = new File(file.getParentFile(), file.getName() + UUID.randomUUID() + ".sav");
         try {
             Files.write(tmp.toPath(), kept, StandardCharsets.UTF_8);

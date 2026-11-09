@@ -291,7 +291,8 @@ public class MorganaBot {
         serverSettings.setMembers(SelfServiceListener.members(this::getJDA));
         serverSettings.setAccess(new Access(serverInfoStore, configuration.superAdmins));
         serverSettings.setGuilds(new JdaGuilds());
-        blockedGuildListener = new BlockedGuildListener(serverSettings::isBlocked, System.out);
+        blockedGuildListener = new BlockedGuildListener(serverSettings::isBlocked, System.out,
+                BlockedGuildListener.auditRecorder(auditLog));
         diagnose = new Diagnose(this);
         loginTokens = new LoginTokenStore();
         loginTokens.start();

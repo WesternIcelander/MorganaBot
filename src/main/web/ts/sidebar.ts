@@ -1,4 +1,5 @@
-// The super admin sidebar: the "System" item (with a red dot when any status card is red), "Blocked servers", and the
+// The super admin sidebar: the "System" item (with a red dot when any status card is red), "Blocked servers", the
+// bot-wide "Audit log", and the
 // server switcher
 // (every server the bot is in, searchable by name or ID, filterable by "Twitch on" and "has problems").
 
@@ -13,16 +14,18 @@ const STATUS_POLL_MS = 60_000;
 export interface SidebarHandlers {
     openSystem(): void;
     openBlocked(): void;
+    openAudit(): void;
     openGuild(guild: AdminGuild): void;
 }
 
-export type SidebarSelection = { kind: "system" } | { kind: "blocked" } | { kind: "guild"; id: string } | null;
+export type SidebarSelection = { kind: "system" } | { kind: "blocked" } | { kind: "audit" } | { kind: "guild"; id: string } | null;
 
 export class Sidebar {
     readonly element: HTMLElement;
     private readonly handlers: SidebarHandlers;
     private readonly systemLink: HTMLAnchorElement;
     private readonly blockedLink: HTMLAnchorElement;
+    private readonly auditLink: HTMLAnchorElement;
     private readonly dot: HTMLElement;
     private readonly list: HTMLElement;
     private readonly count: HTMLElement;
@@ -50,6 +53,11 @@ export class Sidebar {
             event.preventDefault();
             this.handlers.openBlocked();
         });
+        this.auditLink = h("a", { href: "?view=audit", class: "side-link" }, "Audit log");
+        this.auditLink.addEventListener("click", (event) => {
+            event.preventDefault();
+            this.handlers.openAudit();
+        });
         this.search = h("input", { id: "server-search", type: "text", placeholder: "Name or ID", autocomplete: "off" });
         this.twitchOnly = h("input", { id: "filter-twitch", type: "checkbox" });
         this.problemsOnly = h("input", { id: "filter-problems", type: "checkbox" });
@@ -61,7 +69,7 @@ export class Sidebar {
         const refresh = h("button", { type: "button", class: "link-button small" }, "Reload list");
         refresh.addEventListener("click", () => void this.loadGuilds());
         replace(element,
-            h("ul", { class: "side-nav" }, h("li", null, this.systemLink), h("li", null, this.blockedLink)),
+            h("ul", { class: "side-nav" }, h("li", null, this.systemLink), h("li", null, this.blockedLink), h("li", null, this.auditLink)),
             h("h2", { class: "side-title" }, "Servers"),
             h("label", { for: "server-search", class: "visually-hidden" }, "Search servers"),
             this.search,
@@ -94,6 +102,8 @@ export class Sidebar {
         else this.systemLink.removeAttribute("aria-current");
         if (selection?.kind === "blocked") this.blockedLink.setAttribute("aria-current", "page");
         else this.blockedLink.removeAttribute("aria-current");
+        if (selection?.kind === "audit") this.auditLink.setAttribute("aria-current", "page");
+        else this.auditLink.removeAttribute("aria-current");
         for (const link of this.list.querySelectorAll<HTMLAnchorElement>("a[data-id]")) {
             if (selection?.kind === "guild" && link.dataset["id"] === selection.id) link.setAttribute("aria-current", "page");
             else link.removeAttribute("aria-current");

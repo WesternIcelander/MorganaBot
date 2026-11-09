@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { AuditActor, AuditEntry } from "../ts/api.js";
-import { actorsOf, actorText, changeText, duration, typeLabel, valueText } from "../ts/audit-text.js";
+import { actorsOf, actorText, attemptsText, changeText, duration, factText, serverLabel, typeLabel, valueText } from "../ts/audit-text.js";
 
 const actor = (source: AuditActor["source"], name: string | null, userId: string | null, command: string | null = null): AuditActor =>
     ({ source, name, userId, command });
@@ -68,4 +68,27 @@ test("the Twitch switch reads as enabled/disabled", () => {
         "Twitch announcements enabled");
     assert.equal(changeText({ field: "enabled", old: { kind: "boolean", value: "true" }, new: { kind: "boolean", value: "false" } }, "twitchTracking"),
         "Twitch announcements disabled");
+});
+
+test("super-admin-only entries: removing, blocking and blocked servers coming back", () => {
+    assert.equal(typeLabel("serverRemove"), "Bot removed from server");
+    assert.equal(typeLabel("serverUnblock"), "Server unblocked");
+    assert.equal(typeLabel("blockedJoin"), "Blocked server added the bot");
+    assert.equal(typeLabel("blockedStartupLeave"), "Blocked server left at startup");
+    assert.equal(changeText({ field: "blocked", old: { kind: "boolean", value: "false" }, new: { kind: "boolean", value: "true" } }, "serverRemove"),
+        "Blocked from adding the bot back");
+    assert.equal(changeText({ field: "blocked", old: { kind: "boolean", value: "true" }, new: { kind: "boolean", value: "false" } }, "serverUnblock"),
+        "Block lifted");
+    assert.equal(valueText({ kind: "server", id: "100", name: "Bad" }), "Bad (100)");
+    assert.equal(valueText({ kind: "server", id: "100", name: null }), "server (100)");
+    assert.equal(factText({ field: "owner", value: { kind: "user", id: "7", name: "bob" } }), "Owner: @bob (7)");
+    assert.equal(factText({ field: "memberCount", value: { kind: "number", value: "42" } }), "Members: 42");
+    assert.equal(factText({ field: "addedBy", value: { kind: "text", value: "unknown" } }), "Added by: unknown");
+    assert.equal(factText({ field: "addedBy", value: null }), "Added by: unknown");
+    const entry: AuditEntry = { time: "2000", type: "blockedJoin", actor: null, visibility: "superAdmin", streamer: null, subject: null, changes: [], note: null };
+    assert.equal(attemptsText(entry), null);
+    assert.equal(attemptsText({ ...entry, count: 1 }), null);
+    assert.equal(attemptsText({ ...entry, count: 3, firstTime: "1000" }), "3 attempts");
+    assert.equal(serverLabel("100", "Bad"), "Bad (100)");
+    assert.equal(serverLabel("100", null), "Server 100");
 });

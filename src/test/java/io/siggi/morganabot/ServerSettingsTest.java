@@ -220,7 +220,20 @@ class ServerSettingsTest {
         String line = log.toString(java.nio.charset.StandardCharsets.UTF_8);
         assertTrue(line.contains("user999 (999) removed the bot from server \"Main\" (100) and blocked it"), line);
         assertTrue(line.contains("Reason: breaks the rules"), line);
-        assertEquals(auditEntries, auditLog.read(GUILD, true).size(), "audit entries come with step 17");
+        List<AuditEntry> entries = auditLog.read(GUILD, true);
+        assertEquals(auditEntries + 1, entries.size());
+        AuditEntry removed = entries.get(0);
+        assertEquals(AuditEntry.SERVER_REMOVE, removed.type);
+        assertTrue(removed.isSuperAdminOnly());
+        assertEquals(Actor.superAdmin(999L, "user999"), removed.actor);
+        assertEquals(5000L, removed.time);
+        assertEquals(AuditEntry.Value.server(GUILD, "Main"), removed.subject);
+        assertEquals("Main", removed.subject.name);
+        assertEquals("breaks the rules", removed.note);
+        assertEquals(1, removed.changes.size());
+        assertEquals("blocked", removed.changes.get(0).field);
+        assertEquals("true", removed.changes.get(0).newValue.value);
+        assertEquals(auditEntries, auditLog.read(GUILD, false).size(), "hidden from the server's own view");
 
         assertTrue(settings.isBlocked(GUILD));
         assertEquals(List.of(new ServerSettings.BlockedServer(GUILD, "Main", 5000L, 999L, "user999", "breaks the rules")),
@@ -236,6 +249,10 @@ class ServerSettingsTest {
         assertFalse(store.get(GUILD).blocked);
         assertEquals(1, twitch.updates);
         assertTrue(settings.blockedServers().isEmpty());
+        AuditEntry removed = auditLog.read(GUILD, true).get(0);
+        assertEquals(AuditEntry.SERVER_REMOVE, removed.type);
+        assertTrue(removed.changes.isEmpty(), "not blocked");
+        assertNull(removed.note);
     }
 
     @Test
@@ -260,6 +277,20 @@ class ServerSettingsTest {
         assertTrue(store.get(GUILD).blocked);
         assertEquals(1, twitch.updates, "subscriptions still dropped for the blocked server");
         assertTrue(log.toString(java.nio.charset.StandardCharsets.UTF_8).contains("leaving failed"));
+        AuditEntry entry = auditLog.read(GUILD, true).get(0);
+        assertEquals(AuditEntry.SERVER_BLOCK, entry.type);
+        assertTrue(entry.isSuperAdminOnly());
+        assertTrue(entry.note.contains("Leaving failed: timeout"), entry.note);
+    }
+
+    @Test
+    void failedLeaveWithoutBlockRecordsNothing() {
+        FakeGuilds guilds = guilds();
+        captureLog();
+        guilds.failure = new IllegalStateException("timeout");
+        int before = auditLog.read(GUILD, true).size();
+        assertThrows(SettingsException.class, () -> settings.leaveGuild(GUILD, null, false, 999L));
+        assertEquals(before, auditLog.read(GUILD, true).size());
     }
 
     @Test
@@ -277,7 +308,15 @@ class ServerSettingsTest {
         assertNull(info.blockedName);
         assertEquals(3, info.streamers.size());
         assertTrue(log.toString(java.nio.charset.StandardCharsets.UTF_8).contains("user998 (998) unblocked server \"Main\" (100)"));
+        AuditEntry unblocked = auditLog.read(GUILD, true).get(0);
+        assertEquals(AuditEntry.SERVER_UNBLOCK, unblocked.type);
+        assertTrue(unblocked.isSuperAdminOnly());
+        assertEquals(Actor.superAdmin(998L, "user998"), unblocked.actor);
+        assertEquals("Was blocked for: spam", unblocked.note);
+        assertEquals("false", unblocked.changes.get(0).newValue.value);
+        int count = auditLog.read(GUILD, true).size();
         assertNull(settings.unblock(GUILD, 998L), "not blocked any more");
+        assertEquals(count, auditLog.read(GUILD, true).size(), "nothing to record");
         assertNull(settings.unblock(777L, 998L), "no file");
         assertFalse(new File(tempDir.toFile(), "777.json").exists(), "unblocking an unknown server writes nothing");
     }

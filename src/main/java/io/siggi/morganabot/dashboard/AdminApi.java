@@ -1,6 +1,8 @@
 package io.siggi.morganabot.dashboard;
 
 import io.siggi.morganabot.ServerSettings;
+import io.siggi.morganabot.audit.AuditEntry;
+import io.siggi.morganabot.audit.AuditLog;
 import io.siggi.morganabot.config.ServerInfo;
 import io.siggi.morganabot.config.ServerInfoStore;
 import io.siggi.morganabot.dashboard.ApiRouter.Requirement;
@@ -14,10 +16,13 @@ import io.siggi.morganabot.problems.ServerProblems;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Supplier;
 
 /**
@@ -34,12 +39,16 @@ import java.util.function.Supplier;
  *     blocking it from adding the bot back unless {@code block} is false. Needs Discord.</li>
  *     <li>{@code GET /admin/blocked}: every blocked server, newest block first</li>
  *     <li>{@code DELETE /admin/blocked/{id}}: unblocks a server (doesn't add the bot back)</li>
+ *     <li>{@code GET /admin/audit?guild=&type=&before=&limit=}: every server's audit entries merged (including
+ *     super-admin-only ones and servers the bot has left), newest first, paged by time</li>
  * </ul>
  * Turning Twitch on or off for a server is {@code PATCH /guilds/{guildId}/settings} ({@link DashboardApi}).
  */
 public final class AdminApi {
     public static final int LOG_PAGE = 100;
     public static final int LOG_MAX_PAGE = 500;
+    public static final int AUDIT_PAGE = 100;
+    public static final int AUDIT_MAX_PAGE = 500;
 
     /** How a card detail is shown: its label and what kind of value it is. */
     private record DetailInfo(String label, String kind) {
@@ -75,9 +84,11 @@ public final class AdminApi {
     private final ServerProblems problems;
     private final GuildData.Provider guilds;
     private final Supplier<SystemHealth> health;
+    private final AuditLog auditLog;
 
     public AdminApi(ServerInfoStore store, ServerSettings settings, ServerProblems problems, GuildData.Provider guilds,
-                    Supplier<SystemHealth> health) {
+                    Supplier<SystemHealth> health, AuditLog auditLog) {
+        this.auditLog = auditLog;
         this.store = store;
         this.settings = settings;
         this.problems = problems;
@@ -93,6 +104,111 @@ public final class AdminApi {
         api.post("/admin/guilds/{id}/leave", Requirement.SUPER_ADMIN, this::leave);
         api.get("/admin/blocked", Requirement.SUPER_ADMIN, this::blocked);
         api.delete("/admin/blocked/{id}", Requirement.SUPER_ADMIN, this::unblock);
+        api.get("/admin/audit", Requirement.SUPER_ADMIN, this::audit);
+    }
+
+    // --- bot-wide audit log ---
+
+    /**
+     * {@code GET /admin/audit}: {@code {entries: [{guildId, guildName, entry}], nextBefore, servers: [{id, name,
+     * inServer}]}}. {@code servers} lists every server with an audit file (for the filter), whatever the filters are.
+     * Names come from Discord, then the name saved with a block, then the newest server name in its entries.
+     */
+    Object audit(ApiRequest r) throws ApiError {
+        long guildFilter = longQuery(r, "guild", 0L);
+        Set<String> types = new LinkedHashSet<>();
+        String typeParam = r.query("type");
+        if (typeParam != null) {
+            for (String type : typeParam.split(",")) {
+                if (!type.isBlank()) types.add(type.trim());
+            }
+        }
+        long before = longQuery(r, "before", Long.MAX_VALUE);
+        int limit = (int) Math.max(1L, Math.min(AUDIT_MAX_PAGE, longQuery(r, "limit", AUDIT_PAGE)));
+
+        List<AuditLog.GuildEntry> all = auditLog.readAll(true);
+        Map<Long, String> names = serverNames(auditLog.guildIds(), all);
+
+        List<Map<String, Object>> page = new ArrayList<>();
+        Long nextBefore = null;
+        long lastTime = 0L;
+        for (AuditLog.GuildEntry item : all) {
+            AuditEntry entry = item.entry();
+            if (guildFilter != 0L && item.guildId() != guildFilter) continue;
+            if (entry.time >= before) continue;
+            if (!types.isEmpty() && !types.contains(entry.type)) continue;
+            if (page.size() >= limit) {
+                // Entries with the same time as the last one stay on this page, so "before" can't skip any.
+                if (entry.time == lastTime) {
+                    page.add(auditItem(item, names));
+                    continue;
+                }
+                nextBefore = lastTime;
+                break;
+            }
+            page.add(auditItem(item, names));
+            lastTime = entry.time;
+        }
+        List<Map<String, Object>> servers = new ArrayList<>();
+        boolean discord = guilds.discordAvailable();
+        for (Map.Entry<Long, String> server : names.entrySet()) {
+            Map<String, Object> json = new LinkedHashMap<>();
+            json.put("id", server.getKey());
+            json.put("name", server.getValue());
+            json.put("inServer", discord ? inServer(server.getKey()) : null);
+            servers.add(json);
+        }
+        servers.sort((a, b) -> String.CASE_INSENSITIVE_ORDER.compare(
+                a.get("name") == null ? "\uffff" + a.get("id") : String.valueOf(a.get("name")),
+                b.get("name") == null ? "\uffff" + b.get("id") : String.valueOf(b.get("name"))));
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("entries", page);
+        result.put("nextBefore", nextBefore);
+        result.put("servers", servers);
+        return result;
+    }
+
+    private static Map<String, Object> auditItem(AuditLog.GuildEntry item, Map<Long, String> names) {
+        Map<String, Object> json = new LinkedHashMap<>();
+        json.put("guildId", item.guildId());
+        json.put("guildName", names.get(item.guildId()));
+        json.put("entry", item.entry());
+        return json;
+    }
+
+    /** A name for each server ID (null if none is known), in ID order. */
+    private Map<Long, String> serverNames(List<Long> ids, List<AuditLog.GuildEntry> newestFirst) {
+        Map<Long, String> fromEntries = new HashMap<>();
+        for (AuditLog.GuildEntry item : newestFirst) {
+            AuditEntry.Value subject = item.entry().subject;
+            if (subject != null && AuditEntry.Value.SERVER.equals(subject.kind) && subject.name != null) {
+                fromEntries.putIfAbsent(item.guildId(), subject.name);
+            }
+        }
+        boolean discord = guilds.discordAvailable();
+        Set<Long> withFiles = new java.util.HashSet<>(store.guildIds());
+        Map<Long, String> names = new LinkedHashMap<>();
+        for (long id : ids) {
+            String name = null;
+            if (discord) {
+                try {
+                    GuildData guild = guilds.guild(id);
+                    if (guild != null) name = guild.name();
+                } catch (ApiError e) {
+                    // Discord went away meanwhile; fall back to the files.
+                }
+            }
+            if (name == null) {
+                try {
+                    if (withFiles.contains(id)) name = store.get(id).blockedName;
+                } catch (RuntimeException e) {
+                    // Unreadable file: no name from it.
+                }
+            }
+            if (name == null) name = fromEntries.get(id);
+            names.put(id, name);
+        }
+        return names;
     }
 
     // --- removing and blocking servers ---

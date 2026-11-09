@@ -359,7 +359,7 @@ class DashboardApiTest {
                 return "user" + userId;
             }
         });
-        new AdminApi(store, settings, problems, provider, () -> health).register(api);
+        new AdminApi(store, settings, problems, provider, () -> health, auditLog).register(api);
 
         HTTPServer server = new HTTPServerBuilder().setSessions(sessions).build();
         api.register(server);
@@ -925,6 +925,7 @@ class DashboardApiTest {
             assertEquals(403, request("POST", login, "/admin/guilds/100/leave", "{\"confirmName\": \"Main\"}").code());
             assertEquals(403, get(login, "/admin/blocked").code());
             assertEquals(403, request("DELETE", login, "/admin/blocked/100", null).code());
+            assertEquals(403, get(login, "/admin/audit").code());
         }
         assertTrue(leftGuilds.isEmpty(), "nothing left");
         assertEquals(1, health.getLog().list().size(), "nothing dismissed");
@@ -1044,6 +1045,71 @@ class DashboardApiTest {
         assertEquals(2, store.get(GUILD).streamers.size());
         assertTrue(get(sa, "/admin/blocked").json().getAsJsonArray("blocked").isEmpty());
         assertEquals(404, request("DELETE", sa, "/admin/blocked/100", null).code());
+    }
+
+    @Test
+    void superAdminAuditMergesEveryServer() throws IOException {
+        Login sa = login(SUPER, true);
+        // The server's own Audit tab hides super-admin-only entries from normal admins, but super admins see them.
+        AuditEntry startup = new AuditEntry(AuditEntry.BLOCKED_STARTUP_LEAVE).superAdminOnly();
+        startup.subject = AuditEntry.Value.server(GUILD, "Main");
+        auditLog.record(GUILD, Actor.system(), startup);
+        Response adminAudit = get(login(ADMIN), "/guilds/100/audit");
+        assertEquals(200, adminAudit.code(), adminAudit.body());
+        assertEquals(0, adminAudit.json().getAsJsonArray("entries").size());
+        assertEquals(1, get(sa, "/guilds/100/audit").json().getAsJsonArray("entries").size());
+
+        // A settings change, a removal with block, and an unblock on server 100.
+        assertEquals(200, request("PATCH", login(ADMIN), "/guilds/100/settings", "{\"deleteOnOffline\": true}").code());
+        assertEquals(200, request("POST", sa, "/admin/guilds/100/leave", "{\"confirmName\": \"Main\", \"reason\": \"spam\"}").code());
+        assertEquals(200, request("DELETE", sa, "/admin/blocked/100", null).code());
+        // A server the bot has left long ago, with only an audit file (a combined join attempt).
+        AuditEntry join = new AuditEntry(AuditEntry.BLOCKED_JOIN).superAdminOnly();
+        join.time = 1_000L;
+        join.subject = AuditEntry.Value.server(300L, "Gone");
+        join.fact("memberCount", AuditEntry.Value.number(12));
+        auditLog.recordCombined(300L, Actor.system(), join, AuditLog.JOIN_COMBINE_WINDOW);
+        AuditEntry again = new AuditEntry(AuditEntry.BLOCKED_JOIN).superAdminOnly();
+        again.time = 2_000L;
+        again.subject = AuditEntry.Value.server(300L, "Gone");
+        auditLog.recordCombined(300L, Actor.system(), again, AuditLog.JOIN_COMBINE_WINDOW);
+
+        JsonObject all = get(sa, "/admin/audit").json();
+        JsonArray entries = all.getAsJsonArray("entries");
+        assertEquals(5, entries.size(), all.toString());
+        JsonObject newest = entries.get(0).getAsJsonObject();
+        assertEquals("100", newest.get("guildId").getAsString());
+        assertEquals("Main", newest.get("guildName").getAsString());
+        assertEquals(AuditEntry.SERVER_UNBLOCK, newest.getAsJsonObject("entry").get("type").getAsString());
+        assertEquals("superAdmin", newest.getAsJsonObject("entry").get("visibility").getAsString());
+        assertEquals(AuditEntry.SERVER_REMOVE, entries.get(1).getAsJsonObject().getAsJsonObject("entry").get("type").getAsString());
+        JsonObject oldest = entries.get(4).getAsJsonObject();
+        assertEquals("300", oldest.get("guildId").getAsString());
+        assertEquals("Gone", oldest.get("guildName").getAsString(), "name from its entries");
+        assertEquals(2, oldest.getAsJsonObject("entry").get("count").getAsInt());
+        assertEquals("1000", oldest.getAsJsonObject("entry").get("firstTime").getAsString());
+        assertTrue(all.get("nextBefore").isJsonNull());
+        JsonArray servers = all.getAsJsonArray("servers");
+        assertEquals(2, servers.size());
+        assertEquals("Gone", servers.get(0).getAsJsonObject().get("name").getAsString());
+        assertFalse(servers.get(0).getAsJsonObject().get("inServer").getAsBoolean());
+        assertEquals("Main", servers.get(1).getAsJsonObject().get("name").getAsString());
+
+        // Filters and paging.
+        assertEquals(4, get(sa, "/admin/audit?guild=100").json().getAsJsonArray("entries").size());
+        assertEquals(1, get(sa, "/admin/audit?guild=300").json().getAsJsonArray("entries").size());
+        assertEquals(2, get(sa, "/admin/audit?type=serverRemove,serverUnblock").json().getAsJsonArray("entries").size());
+        assertEquals(0, get(sa, "/admin/audit?guild=300&type=serverRemove").json().getAsJsonArray("entries").size());
+        // Entries with the same time stay on one page, so the first page may hold more than one.
+        JsonObject first = get(sa, "/admin/audit?limit=1").json();
+        int firstSize = first.getAsJsonArray("entries").size();
+        assertTrue(firstSize >= 1 && firstSize < 5, first.toString());
+        String next = first.get("nextBefore").getAsString();
+        JsonObject rest = get(sa, "/admin/audit?limit=10&before=" + next).json();
+        assertEquals(5 - firstSize, rest.getAsJsonArray("entries").size());
+        assertEquals(400, get(sa, "/admin/audit?guild=abc").code());
+        assertEquals(400, get(sa, "/admin/audit?before=x").code());
+
     }
 
     @Test

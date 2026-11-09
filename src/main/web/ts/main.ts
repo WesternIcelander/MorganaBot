@@ -1,6 +1,6 @@
 // The dashboard shell: who's logged in (GET /me), the server dropdown, the page tabs, logout, and the
 // "run /dashboard again" notice when the session has expired. Super admin sessions get the sidebar (System page,
-// Blocked servers and server switcher) instead of the dropdown.
+// Blocked servers, Audit log and server switcher) instead of the dropdown.
 
 import type { AdminGuild, GuildSummary, Me } from "./api.js";
 import { busy, errorMessage, h, replace } from "./dom.js";
@@ -13,6 +13,7 @@ import { streamPage } from "./stream.js";
 import { Sidebar } from "./sidebar.js";
 import { renderSystemPage } from "./system.js";
 import { renderBlockedPage } from "./blocked.js";
+import { renderAdminAuditPage } from "./admin-audit.js";
 
 /** Every page, in tab order. A server opens on the first page it offers (admins: Settings, streamers: My stream). */
 const PAGES: Page[] = [settingsPage, streamersPage, auditPage, streamPage];
@@ -30,10 +31,10 @@ let current: GuildSummary | null = null;
 /** The page from the URL or the tabs; null for the server's default page. */
 let currentPage: string | null = null;
 /** A super admin page that isn't about one server (no server selected), or null. */
-type View = "system" | "blocked";
+type View = "system" | "blocked" | "audit";
 let view: View | null = null;
 
-const VIEW_TITLES: Record<View, string> = { system: "System", blocked: "Blocked servers" };
+const VIEW_TITLES: Record<View, string> = { system: "System", blocked: "Blocked servers", audit: "Audit log" };
 let sidebar: Sidebar | null = null;
 /** Bumped on every navigation, so a slow page load can't draw over a newer one. */
 let generation = 0;
@@ -85,7 +86,7 @@ function pageFromUrl(): string | null {
 
 function viewFromUrl(): View | null {
     const value = new URLSearchParams(window.location.search).get("view");
-    return value === "system" || value === "blocked" ? value : null;
+    return value === "system" || value === "blocked" || value === "audit" ? value : null;
 }
 
 function writeUrl(push: boolean): void {
@@ -219,7 +220,7 @@ async function openPage(): Promise<void> {
     }
 }
 
-/** A super admin page that isn't about one server: System or Blocked servers. */
+/** A super admin page that isn't about one server: System, Blocked servers or the merged Audit log. */
 async function openView(which: View): Promise<void> {
     if (me === null) return;
     view = which;
@@ -231,7 +232,8 @@ async function openView(which: View): Promise<void> {
     replace(content(), root);
     try {
         if (which === "system") await renderSystemPage(root, (status) => sidebar?.setStatus(status));
-        else await renderBlockedPage(root);
+        else if (which === "blocked") await renderBlockedPage(root);
+        else await renderAdminAuditPage(root, openGuildById);
     } catch (error) {
         if (run !== generation) return;
         if (error instanceof ApiFailure && error.sessionExpired) return;
@@ -264,6 +266,21 @@ function serverRemoved(blocked: boolean): void {
     }, 2500);
 }
 
+/** A server picked on the Audit log page (only offered for servers the bot is in). */
+function openGuildById(id: string, name: string | null): void {
+    const listed = sidebar?.guild(id);
+    if (listed !== undefined) {
+        openFromSidebar(listed);
+        return;
+    }
+    if (me === null) return;
+    view = null;
+    current = me.guilds.find((g) => g.id === id) ?? { id, name: name ?? "Server " + id, iconUrl: null, access: "admin" };
+    currentPage = null;
+    writeUrl(true);
+    void openPage();
+}
+
 /** A server picked in the sidebar. Super admins can open every server, even one /me didn't list yet. */
 function openFromSidebar(guild: AdminGuild): void {
     if (me === null) return;
@@ -284,6 +301,7 @@ function setUpSidebar(user: Me): void {
         sidebar = new Sidebar(el("sidebar"), {
             openSystem: () => goToView("system"),
             openBlocked: () => goToView("blocked"),
+            openAudit: () => goToView("audit"),
             openGuild: openFromSidebar,
         });
     }

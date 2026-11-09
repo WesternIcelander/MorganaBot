@@ -1,6 +1,6 @@
 // Audit log entries in words (io.siggi.morganabot.audit.AuditEntry). No DOM here, so this runs under the Node tests.
 
-import type { AuditActor, AuditChange, AuditEntry, AuditValue } from "./api.js";
+import type { AuditActor, AuditChange, AuditEntry, AuditFact, AuditValue } from "./api.js";
 
 /** Entry types and their labels, for the filter and the list (AuditEntry's type constants). */
 export const AUDIT_TYPES: Record<string, string> = {
@@ -26,8 +26,17 @@ export const AUDIT_TYPES: Record<string, string> = {
     twitchTracking: "Twitch announcements",
 };
 
+/** Entry types only super admins see (removing, blocking, blocked servers coming back). */
+export const SUPER_ADMIN_AUDIT_TYPES: Record<string, string> = {
+    serverRemove: "Bot removed from server",
+    serverBlock: "Server blocked",
+    serverUnblock: "Server unblocked",
+    blockedJoin: "Blocked server added the bot",
+    blockedStartupLeave: "Blocked server left at startup",
+};
+
 export function typeLabel(type: string): string {
-    return AUDIT_TYPES[type] ?? type;
+    return AUDIT_TYPES[type] ?? SUPER_ADMIN_AUDIT_TYPES[type] ?? type;
 }
 
 const FIELDS: Record<string, string> = {
@@ -45,6 +54,10 @@ const FIELDS: Record<string, string> = {
     allowEveryone: "@everyone/@here",
     mentionRole: "Mentionable role",
     removeAfterDays: "Remove after (days)",
+    blocked: "Blocked from adding the bot back",
+    owner: "Owner",
+    memberCount: "Members",
+    addedBy: "Added by",
 };
 
 export function fieldLabel(field: string): string {
@@ -116,6 +129,8 @@ export function valueText(value: AuditValue | null, field = "", type = ""): stri
             return (name !== null ? "@" + name : "user") + " (" + id + ")";
         case "twitch":
             return name !== null ? name + " (" + (id ?? "?") + ")" : "Twitch account " + (id ?? "?");
+        case "server":
+            return (name !== null ? name : "server") + " (" + (id ?? "?") + ")";
         case "boolean":
             return value.value === "true" ? "on" : "off";
         case "number": {
@@ -145,6 +160,9 @@ export function changeText(change: AuditChange, type = ""): string {
     const to = valueText(newValue, change.field, type);
     const added = oldValue === null && newValue !== null;
     const removed = newValue === null && oldValue !== null;
+    if (change.field === "blocked") {
+        return newValue?.value === "true" ? "Blocked from adding the bot back" : "Block lifted";
+    }
     if (type === "twitchTracking" && change.field === "enabled") {
         return "Twitch announcements " + (newValue?.value === "true" ? "enabled" : "disabled");
     }
@@ -175,4 +193,22 @@ export function actorsOf(entries: readonly AuditEntry[]): [string, string][] {
         if (!seen.has(actor.userId)) seen.set(actor.userId, (actor.name ?? "user") + " (" + actor.userId + ")");
     }
     return [...seen.entries()].sort((a, b) => a[1].localeCompare(b[1]));
+}
+
+/** A fact as one line, e.g. "Owner: @bob (7)", "Members: 42", "Added by: unknown". */
+export function factText(fact: AuditFact): string {
+    const value = fact.value ?? null;
+    return fieldLabel(fact.field) + ": " + (value === null ? "unknown" : valueText(value, fact.field));
+}
+
+/** How many times a combined entry happened, e.g. "3 attempts"; null for a single one. */
+export function attemptsText(entry: AuditEntry): string | null {
+    const count = entry.count ?? null;
+    if (count === null || count <= 1) return null;
+    return count + " attempts";
+}
+
+/** A server as a label: "Name (id)", or "Server id" if its name isn't known. */
+export function serverLabel(id: string, name: string | null): string {
+    return name !== null ? name + " (" + id + ")" : "Server " + id;
 }

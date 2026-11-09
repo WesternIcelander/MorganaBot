@@ -38,6 +38,21 @@ public class AuditEntry {
     /** {@code enabledTwitchTracking} turned on or off (super admins only). */
     public static final String TWITCH_TRACKING = "twitchTracking";
 
+    // Super-admin-only entry types (always written with VISIBILITY_SUPER_ADMIN; subject is the server).
+    /** A super admin removed the bot from the server (change {@code blocked} if it was blocked too). */
+    public static final String SERVER_REMOVE = "serverRemove";
+    /** A super admin blocked the server, but leaving it failed (the bot leaves on its next join or startup). */
+    public static final String SERVER_BLOCK = "serverBlock";
+    /** A super admin lifted the server's block. */
+    public static final String SERVER_UNBLOCK = "serverUnblock";
+    /**
+     * A blocked server added the bot back and it left straight away. Attempts within
+     * {@link AuditLog#JOIN_COMBINE_WINDOW} of each other are combined ({@link #count}, {@link #firstTime}).
+     */
+    public static final String BLOCKED_JOIN = "blockedJoin";
+    /** The bot was still in a blocked server at startup and left it. */
+    public static final String BLOCKED_STARTUP_LEAVE = "blockedStartupLeave";
+
     public static final String VISIBILITY_SERVER = "server";
     public static final String VISIBILITY_SUPER_ADMIN = "superAdmin";
 
@@ -68,6 +83,19 @@ public class AuditEntry {
      * Optional free text, e.g. a reason.
      */
     public String note;
+    /**
+     * Facts about the event that aren't changes, e.g. a blocked server's owner and member count. Null if none (most
+     * entries).
+     */
+    public List<Fact> facts;
+    /**
+     * How many times this event happened, for combined entries ({@link #BLOCKED_JOIN}); null means once.
+     */
+    public Integer count;
+    /**
+     * When a combined entry first happened; {@link #time} is the latest. Null if not combined.
+     */
+    public Long firstTime;
 
     public AuditEntry() {
     }
@@ -86,6 +114,35 @@ public class AuditEntry {
             changes.add(new Change(field, oldValue, newValue));
         }
         return this;
+    }
+
+    /**
+     * Adds a fact (skipped if {@code value} is null).
+     *
+     * @return this
+     */
+    public AuditEntry fact(String field, Value value) {
+        if (value == null) return this;
+        if (facts == null) facts = new ArrayList<>();
+        facts.add(new Fact(field, value));
+        return this;
+    }
+
+    /**
+     * Marks this entry as only visible to super admins.
+     *
+     * @return this
+     */
+    public AuditEntry superAdminOnly() {
+        visibility = VISIBILITY_SUPER_ADMIN;
+        return this;
+    }
+
+    /**
+     * How many times this happened (1 unless combined).
+     */
+    public int times() {
+        return count == null || count < 1 ? 1 : count;
     }
 
     public boolean hasChanges() {
@@ -114,6 +171,22 @@ public class AuditEntry {
     }
 
     /**
+     * A fact about an event, e.g. {@code owner} → a user.
+     */
+    public static class Fact {
+        public String field;
+        public Value value;
+
+        public Fact() {
+        }
+
+        public Fact(String field, Value value) {
+            this.field = field;
+            this.value = value;
+        }
+    }
+
+    /**
      * A single value in a change. Null stands for "unset". Equality only looks at kind, ID and value, not the name, so
      * a rename alone never counts as a change.
      */
@@ -125,6 +198,7 @@ public class AuditEntry {
         public static final String TEXT = "text";
         public static final String BOOLEAN = "boolean";
         public static final String NUMBER = "number";
+        public static final String SERVER = "server";
 
         public String kind;
         /**
@@ -177,6 +251,22 @@ public class AuditEntry {
          */
         public static Value twitch(String id, String login) {
             return id == null ? null : new Value(TWITCH, id, login, null);
+        }
+
+        /**
+         * @param name the server's name at the time, if known
+         * @return the Discord server, or null for 0
+         */
+        public static Value server(long id, String name) {
+            return id == 0L ? null : new Value(SERVER, Long.toString(id), name, null);
+        }
+
+        /**
+         * @param name the user's name at the time, if known (otherwise it's looked up when the entry is recorded)
+         * @return the Discord user, or null for 0 (unset)
+         */
+        public static Value user(long id, String name) {
+            return id == 0L ? null : new Value(USER, Long.toString(id), name, null);
         }
 
         /**

@@ -67,7 +67,7 @@ public class WebHandler {
         new DashboardApi(bot.getServerInfoStore(), bot.getServerSettings(), bot.getAccess(), bot.getAuditLog(),
                 bot.getServerProblems(), guilds, this::twitchUsers, this::twitchTrouble).register(api);
         new AdminApi(bot.getServerInfoStore(), bot.getServerSettings(), bot.getServerProblems(), guilds,
-                bot::getSystemHealth).register(api);
+                bot::getSystemHealth, bot.getAuditLog()).register(api);
         api.register(httpServer);
         new StaticFiles(WebHandler.class.getClassLoader(), "web").register(httpServer);
         (thread = new Thread(() -> {

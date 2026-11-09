@@ -220,4 +220,100 @@ class AuditLogTest {
         for (AuditEntry entry : entries) ids.add(entry.changes.get(0).oldValue.id);
         assertEquals(200, ids.size());
     }
+
+    // --- combined join attempts and the merged view (step 17) ---
+
+    private static AuditEntry join(long time, String name) {
+        AuditEntry entry = new AuditEntry(AuditEntry.BLOCKED_JOIN).superAdminOnly();
+        entry.time = time;
+        entry.subject = AuditEntry.Value.server(GUILD, name);
+        entry.fact("memberCount", AuditEntry.Value.number(5));
+        return entry;
+    }
+
+    @Test
+    void joinAttemptsWithinTheWindowAreCombined() {
+        AuditLog log = log(AuditLog.MAX_ENTRIES);
+        long hour = AuditLog.JOIN_COMBINE_WINDOW;
+        log.recordCombined(GUILD, Actor.system(), join(1_000L, "Bad"), hour);
+        AuditEntry first = log.read(GUILD, true).get(0);
+        assertNull(first.count, "a single attempt isn't marked as combined");
+        assertNull(first.firstTime);
+        assertEquals(1, first.times());
+
+        log.recordCombined(GUILD, Actor.system(), join(1_000L + hour / 2, "Bad"), hour);
+        // An unrelated entry in between doesn't stop combining, and stays before the combined one.
+        log.record(GUILD, ACTOR, entry(7));
+        log.recordCombined(GUILD, Actor.system(), join(1_000L + hour, "Bad renamed"), hour);
+        List<AuditEntry> entries = log.read(GUILD, true);
+        assertEquals(2, entries.size());
+        AuditEntry combined = entries.get(0);
+        assertEquals(AuditEntry.BLOCKED_JOIN, combined.type);
+        assertEquals(3, combined.count);
+        assertEquals(1_000L, combined.firstTime);
+        assertEquals(1_000L + hour, combined.time);
+        assertEquals("Bad renamed", combined.subject.name, "newest details kept");
+        assertEquals("5", combined.facts.get(0).value.value);
+        assertTrue(combined.isSuperAdminOnly());
+        assertEquals(AuditEntry.LIVE_CHANNEL, entries.get(1).type);
+        assertEquals(1, log.read(GUILD, false).size(), "hidden from the server's view");
+
+        // More than an hour after the last attempt: a new entry.
+        log.recordCombined(GUILD, Actor.system(), join(2_000L + 2 * hour, "Bad"), hour);
+        entries = log.read(GUILD, true);
+        assertEquals(3, entries.size());
+        assertNull(entries.get(0).count);
+        assertEquals(3, entries.get(1).count);
+    }
+
+    @Test
+    void blockChangesEndARunOfJoinAttempts() {
+        AuditLog log = log(AuditLog.MAX_ENTRIES);
+        long hour = AuditLog.JOIN_COMBINE_WINDOW;
+        log.recordCombined(GUILD, Actor.system(), join(1_000L, "Bad"), hour);
+        AuditEntry unblock = new AuditEntry(AuditEntry.SERVER_UNBLOCK).superAdminOnly();
+        unblock.time = 2_000L;
+        log.record(GUILD, Actor.superAdmin(9L, "boss"), unblock);
+        log.recordCombined(GUILD, Actor.system(), join(3_000L, "Bad"), hour);
+        List<AuditEntry> entries = log.read(GUILD, true);
+        assertEquals(3, entries.size());
+        assertNull(entries.get(0).count);
+    }
+
+    @Test
+    void combinedEntriesRespectTheTrimLimit() {
+        AuditLog log = log(3);
+        for (int i = 0; i < 3; i++) log.record(GUILD, ACTOR, entry(i));
+        log.recordCombined(GUILD, Actor.system(), join(System.currentTimeMillis(), "Bad"), AuditLog.JOIN_COMBINE_WINDOW);
+        log.recordCombined(GUILD, Actor.system(), join(System.currentTimeMillis() + 1, "Bad"), AuditLog.JOIN_COMBINE_WINDOW);
+        List<AuditEntry> entries = log.read(GUILD, true);
+        assertEquals(3, entries.size());
+        assertEquals(2, entries.get(0).count);
+    }
+
+    @Test
+    void readAllMergesEveryServerNewestFirst() throws Exception {
+        AuditLog log = log(AuditLog.MAX_ENTRIES);
+        AuditEntry a = entry(1);
+        a.time = 100L;
+        log.record(GUILD, ACTOR, a);
+        AuditEntry b = entry(2);
+        b.time = 300L;
+        log.record(GUILD, ACTOR, b);
+        AuditEntry c = join(200L, "Gone");
+        log.record(200L, Actor.system(), c);
+        // Other files in the directory are ignored.
+        Files.writeString(tempDir.resolve("200.json"), "{}");
+        Files.writeString(tempDir.resolve("200-problems.json"), "[]");
+        Files.writeString(tempDir.resolve("x-audit.jsonl"), "{}");
+
+        assertEquals(List.of(GUILD, 200L), log.guildIds());
+        List<AuditLog.GuildEntry> all = log.readAll(true);
+        assertEquals(3, all.size());
+        assertEquals(GUILD, all.get(0).guildId());
+        assertEquals(300L, all.get(0).entry().time);
+        assertEquals(200L, all.get(1).guildId());
+        assertEquals(100L, all.get(2).entry().time);
+        assertEquals(2, log.readAll(false).size(), "super-admin-only entries left out");
+    }
 }

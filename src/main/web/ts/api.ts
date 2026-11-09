@@ -293,6 +293,18 @@ export interface AuditEntry {
     subject: AuditValue | null;
     changes: AuditChange[];
     note: string | null;
+    /** Facts about the event (e.g. a blocked server's owner); null or missing for most entries. */
+    facts?: AuditFact[] | null;
+    /** How many times it happened, for combined entries (blocked join attempts); null or missing means once. */
+    count?: number | null;
+    /** When a combined entry first happened (`time` is the latest). */
+    firstTime?: Id | null;
+}
+
+/** AuditEntry.Fact */
+export interface AuditFact {
+    field: string;
+    value: AuditValue | null;
 }
 
 /** `GET …/audit` */
@@ -302,6 +314,29 @@ export interface AuditPage {
 }
 
 // --- super admin (io.siggi.morganabot.dashboard.AdminApi) ---
+
+/** One entry of `GET /admin/audit`, with the server it belongs to. */
+export interface AdminAuditItem {
+    guildId: Id;
+    /** The server's name (Discord, the block, or its newest entry), or null if unknown. */
+    guildName: string | null;
+    entry: AuditEntry;
+}
+
+/** A server with an audit file, for the filter. */
+export interface AdminAuditServer {
+    id: Id;
+    name: string | null;
+    /** Whether the bot is in it; null while Discord is unavailable. */
+    inServer: boolean | null;
+}
+
+/** `GET /admin/audit?guild=&type=&before=&limit=` */
+export interface AdminAuditPage {
+    entries: AdminAuditItem[];
+    nextBefore: Id | null;
+    servers: AdminAuditServer[];
+}
 
 /** One server in `GET /admin/guilds`. */
 export interface AdminGuild {

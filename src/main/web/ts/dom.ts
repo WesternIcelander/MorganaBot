@@ -12,6 +12,7 @@ export interface Attrs {
     href?: string;
     type?: string;
     name?: string;
+    label?: string;
     value?: string;
     placeholder?: string;
     for?: string;
