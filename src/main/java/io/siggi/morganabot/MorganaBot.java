@@ -117,6 +117,13 @@ public class MorganaBot {
         return serverSettings;
     }
 
+    /**
+     * Who may use which parts of a server's dashboard; checked on every request.
+     */
+    public Access getAccess() {
+        return serverSettings.getAccess();
+    }
+
     public AuditLog getAuditLog() {
         return auditLog;
     }
@@ -229,6 +236,7 @@ public class MorganaBot {
             }
         }, auditLog);
         serverSettings.setMembers(SelfServiceListener.members(this::getJDA));
+        serverSettings.setAccess(new Access(serverInfoStore, configuration.superAdmins));
         diagnose = new Diagnose(this);
         // The web server and the Twitch watcher don't need Discord to start, and the system status must stay
         // reachable when Discord is down. The watcher's guild loops wait for Discord themselves.
@@ -369,6 +377,24 @@ public class MorganaBot {
                 Commands.slash("setselfserviceexpiry", "Remove self-added streamers after this many days without a self-service role")
                         .addOptions(new OptionData(OptionType.INTEGER, "days", "How many days? 0 means never", true)
                                 .setRequiredRange(0, ServerSettings.MAX_REMOVE_AFTER_DAYS))
+                        .setContexts(InteractionContextType.GUILD)
+                        .setDefaultPermissions(DefaultMemberPermissions.DISABLED),
+                Commands.slash("addadminrole", "Give members with a role full access to this server's MorganaBot dashboard")
+                        .addOption(OptionType.ROLE, "role", "Which role?", true)
+                        .setContexts(InteractionContextType.GUILD)
+                        .setDefaultPermissions(DefaultMemberPermissions.DISABLED),
+                Commands.slash("removeadminrole", "Stop giving members with a role full dashboard access")
+                        .addOption(OptionType.ROLE, "role", "Which role?", true)
+                        .setContexts(InteractionContextType.GUILD)
+                        .setDefaultPermissions(DefaultMemberPermissions.DISABLED),
+                Commands.slash("addmessagerole", "Let streamers with a role write their own live message")
+                        .addOption(OptionType.ROLE, "role", "Which role?", true)
+                        .addOption(OptionType.BOOLEAN, "allow-everyone", "May they use @everyone and @here? (default: no)", false)
+                        .addOption(OptionType.STRING, "mention-roles", "Roles they may mention, e.g. @Viewers @Fans (default: none)", false)
+                        .setContexts(InteractionContextType.GUILD)
+                        .setDefaultPermissions(DefaultMemberPermissions.DISABLED),
+                Commands.slash("removemessagerole", "Stop letting streamers with a role write their own live message")
+                        .addOption(OptionType.ROLE, "role", "Which role?", true)
                         .setContexts(InteractionContextType.GUILD)
                         .setDefaultPermissions(DefaultMemberPermissions.DISABLED),
                 Commands.slash("streamerlist", "Get a list of streamers in this Discord!")

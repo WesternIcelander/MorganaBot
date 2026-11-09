@@ -233,6 +233,92 @@ public class TwitchCommandHandler {
         });
     }
 
+    // --- access and message permissions ---
+
+    static void addAdminRole(MorganaBot bot, SlashCommandInteractionEvent event) {
+        handle(event, () -> {
+            Role role = event.getOption("role").getAsRole();
+            if (role.isPublicRole()) {
+                return "The @everyone role can't be an admin role.";
+            }
+            boolean added = bot.getServerSettings().addAdminRole(actor(event), Access.view(event.getMember()), role.getIdLong());
+            return added
+                    ? "Members with <@&" + role.getIdLong() + "> now have full access to this server's MorganaBot dashboard."
+                    : "<@&" + role.getIdLong() + "> is already an admin role.";
+        });
+    }
+
+    static void removeAdminRole(MorganaBot bot, SlashCommandInteractionEvent event) {
+        handle(event, () -> {
+            long roleId = event.getOption("role").getAsRole().getIdLong();
+            boolean removed = bot.getServerSettings().removeAdminRole(actor(event), Access.view(event.getMember()), roleId);
+            return removed
+                    ? "<@&" + roleId + "> is no longer an admin role."
+                    : "<@&" + roleId + "> isn't an admin role.";
+        });
+    }
+
+    static void addMessageRole(MorganaBot bot, SlashCommandInteractionEvent event) {
+        handle(event, () -> {
+            Role role = event.getOption("role").getAsRole();
+            OptionMapping everyoneOption = event.getOption("allow-everyone");
+            boolean allowEveryone = everyoneOption != null && everyoneOption.getAsBoolean();
+            List<Long> mentionRoles;
+            try {
+                mentionRoles = parseRoleList(getString(event, "mention-roles"));
+            } catch (IllegalArgumentException e) {
+                return e.getMessage();
+            }
+            for (long roleId : mentionRoles) {
+                if (event.getGuild().getRoleById(roleId) == null) {
+                    return "There's no role with the ID " + roleId + " in this server.";
+                }
+            }
+            bot.getServerSettings().addMessageRule(actor(event), event.getGuild().getIdLong(), role.getIdLong(), allowEveryone, mentionRoles);
+            StringBuilder sb = new StringBuilder();
+            sb.append("Streamers with <@&").append(role.getIdLong()).append("> can now write their own live message. They may use ");
+            List<String> allowed = new ArrayList<>();
+            if (allowEveryone) allowed.add("@everyone and @here");
+            for (long roleId : mentionRoles) allowed.add("<@&" + roleId + ">");
+            sb.append(allowed.isEmpty() ? "no pings" : String.join(", ", allowed)).append(".");
+            return sb.toString();
+        });
+    }
+
+    static void removeMessageRole(MorganaBot bot, SlashCommandInteractionEvent event) {
+        handle(event, () -> {
+            long roleId = event.getOption("role").getAsRole().getIdLong();
+            boolean removed = bot.getServerSettings().removeMessageRule(actor(event), event.getGuild().getIdLong(), roleId);
+            return removed
+                    ? "Streamers with <@&" + roleId + "> no longer get to write their own live message through that role. Messages they already saved are kept."
+                    : "<@&" + roleId + "> doesn't have a message permission rule.";
+        });
+    }
+
+    /**
+     * Role mentions ({@code <@&id>}) or plain role IDs, separated by spaces or commas. Each role is listed once.
+     *
+     * @throws IllegalArgumentException with a message for the user if something isn't a role
+     */
+    static List<Long> parseRoleList(String text) {
+        List<Long> roles = new ArrayList<>();
+        if (text == null || text.isBlank()) return roles;
+        for (String part : text.trim().split("[\\s,]+")) {
+            if (part.isEmpty()) continue;
+            String id = part;
+            if (id.startsWith("<@&") && id.endsWith(">")) id = id.substring(3, id.length() - 1);
+            long roleId;
+            try {
+                roleId = Long.parseLong(id);
+            } catch (NumberFormatException e) {
+                throw new IllegalArgumentException("\"" + part + "\" isn't a role. Mention the roles, e.g. @Viewers @Fans.");
+            }
+            if (roleId <= 0L) throw new IllegalArgumentException("\"" + part + "\" isn't a role.");
+            if (!roles.contains(roleId)) roles.add(roleId);
+        }
+        return roles;
+    }
+
     static void getStreamerList(MorganaBot bot, SlashCommandInteractionEvent event) {
         handle(event, () -> {
             ServerInfo serverInfo = bot.getServerSettings().requireTwitchEnabled(event.getGuild().getIdLong());

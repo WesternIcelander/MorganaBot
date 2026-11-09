@@ -152,6 +152,7 @@ public class ServerSettings {
     private final Twitch twitch;
     private final AuditLog auditLog;
     private volatile Members members = Members.NONE;
+    private volatile Access access;
     private LongSupplier clock = System::currentTimeMillis;
     /**
      * Last {@link #selfSetTwitch} per "guildId:userId", for the rate limit.
@@ -162,6 +163,18 @@ public class ServerSettings {
         this.store = store;
         this.twitch = twitch;
         this.auditLog = auditLog;
+        this.access = new Access(store, List.of());
+    }
+
+    /**
+     * Sets the access rules (with the bot's super admins). Without this, nobody is a super admin.
+     */
+    public void setAccess(Access access) {
+        this.access = access == null ? new Access(store, List.of()) : access;
+    }
+
+    public Access getAccess() {
+        return access;
     }
 
     /**
@@ -364,9 +377,284 @@ public class ServerSettings {
             ServerInfo.Streamer streamer = findStreamer(serverInfo, ref, user);
             audit.streamer = streamerValue(streamer, user);
             audit.change("template", Value.text(streamer.liveNotificationTemplate), Value.text(value));
-            streamer.liveNotificationTemplate = value;
+            if (!Objects.equals(streamer.liveNotificationTemplate, value)) {
+                streamer.liveNotificationTemplate = value;
+                streamer.templateSetBy = value == null ? 0L : actorUserId(actor);
+            }
             return copyOf(streamer);
         });
+    }
+
+    /**
+     * A streamer saving their own live message (dashboard). Admins (and super admins) can write anything. Anyone else
+     * needs a streamer entry and a message customization rule, and every {@code @everyone}, {@code @here}, role
+     * mention and user mention in the new text must be allowed by their current rules or already be in their
+     * previously saved message (their own template, or else the server-wide one their posts use now). User mentions
+     * are never allowed by rules, except of themself. The text is never changed: a mention that isn't allowed rejects
+     * the save.
+     *
+     * @param template the new text, or null to go back to the server-wide message
+     * @return a copy of their changed entry
+     */
+    public ServerInfo.Streamer setOwnTemplate(Actor actor, Access.MemberView member, String template) throws SettingsException {
+        long guildId = member.guildId();
+        requireTwitchEnabled(guildId);
+        String value = normalizeTemplate(template);
+        boolean superAdmin = access.isSuperAdmin(member.userId());
+        return modify(actor, guildId, AuditEntry.STREAMER_TEMPLATE, (serverInfo, audit) -> {
+            ServerInfo.Streamer own = null;
+            for (ServerInfo.Streamer streamer : serverInfo.streamers) {
+                if (streamer.discordId != 0L && streamer.discordId == member.userId()) {
+                    own = streamer;
+                    break;
+                }
+            }
+            if (own == null) {
+                throw new SettingsException("You don't have a streamer entry in this server.");
+            }
+            if (!Access.isAdmin(serverInfo, member, superAdmin)) {
+                if (!Access.hasRule(serverInfo, member.roles())) {
+                    throw new SettingsException("You don't have a role that lets you write your own live message. Ask an admin.");
+                }
+                if (value != null) {
+                    String previous = own.liveNotificationTemplate != null ? own.liveNotificationTemplate : serverInfo.liveNotificationTemplate;
+                    List<String> refused = disallowedMentions(Mentions.parse(value), Mentions.parse(previous),
+                            Access.allowedMentions(serverInfo, member.roles()), member.userId());
+                    if (!refused.isEmpty()) {
+                        throw new SettingsException("Your message contains mentions you aren't allowed to use: "
+                                + String.join(", ", refused) + ". Remove them and save again.");
+                    }
+                }
+            }
+            audit.streamer = Value.twitch(own.twitchId, null);
+            audit.change("template", Value.text(own.liveNotificationTemplate), Value.text(value));
+            if (!Objects.equals(own.liveNotificationTemplate, value)) {
+                own.liveNotificationTemplate = value;
+                own.templateSetBy = value == null ? 0L : member.userId();
+            }
+            return copyOf(own);
+        });
+    }
+
+    /**
+     * The mentions in {@code wanted} that are neither allowed nor already in {@code previous}, written as they appear
+     * in a message ({@code @everyone}, {@code @here}, {@code <@&id>}, {@code <@id>}). Mentions are compared by
+     * identity, not by count.
+     *
+     * @param self the member saving; mentioning themself is always fine
+     */
+    static List<String> disallowedMentions(Mentions wanted, Mentions previous, Access.MentionPermissions allowed, long self) {
+        List<String> refused = new ArrayList<>();
+        if (wanted.everyone() && !allowed.allowsEveryone() && !previous.everyone()) refused.add("@everyone");
+        if (wanted.here() && !allowed.allowsEveryone() && !previous.here()) refused.add("@here");
+        for (long roleId : wanted.roles()) {
+            if (!allowed.allowsRole(roleId) && !previous.roles().contains(roleId)) refused.add("<@&" + roleId + ">");
+        }
+        for (long userId : wanted.users()) {
+            if (userId != self && !allowed.allowsUsers() && !previous.users().contains(userId)) refused.add("<@" + userId + ">");
+        }
+        return refused;
+    }
+
+    // --- access ---
+
+    /**
+     * Makes a role an admin role (full dashboard access). Only Discord Administrators and super admins may.
+     *
+     * @param editor who's making the change, as access checks see them
+     * @return whether it wasn't an admin role yet
+     */
+    public boolean addAdminRole(Actor actor, Access.MemberView editor, long roleId) throws SettingsException {
+        requireAdminRoleEditor(editor);
+        long guildId = editor.guildId();
+        validateAdminRole(guildId, roleId);
+        return modifyAny(actor, guildId, AuditEntry.ADMIN_ROLES, false, (serverInfo, audit) -> {
+            audit.subject = Value.role(roleId);
+            List<Long> roles = serverInfo.adminRoles();
+            roles.removeIf(Objects::isNull);
+            if (roles.contains(roleId)) return false;
+            roles.add(roleId);
+            audit.change("adminRole", null, Value.role(roleId));
+            return true;
+        });
+    }
+
+    /**
+     * Removes an admin role. Only Discord Administrators and super admins may.
+     *
+     * @return whether it was an admin role
+     */
+    public boolean removeAdminRole(Actor actor, Access.MemberView editor, long roleId) throws SettingsException {
+        requireAdminRoleEditor(editor);
+        if (roleId <= 0L) throw new SettingsException("Invalid role.");
+        return modifyAny(actor, editor.guildId(), AuditEntry.ADMIN_ROLES, false, (serverInfo, audit) -> {
+            audit.subject = Value.role(roleId);
+            if (!serverInfo.adminRoles().remove(Long.valueOf(roleId))) return false;
+            audit.change("adminRole", Value.role(roleId), null);
+            return true;
+        });
+    }
+
+    /**
+     * Replaces the whole admin role list (for the dashboard). Only Discord Administrators and super admins may.
+     */
+    public void setAdminRoles(Actor actor, Access.MemberView editor, List<Long> roleIds) throws SettingsException {
+        requireAdminRoleEditor(editor);
+        long guildId = editor.guildId();
+        Set<Long> wanted = new LinkedHashSet<>();
+        for (Long roleId : roleIds) {
+            if (roleId == null) throw new SettingsException("Invalid role.");
+            validateAdminRole(guildId, roleId);
+            wanted.add(roleId);
+        }
+        List<AuditEntry> entries = new ArrayList<>();
+        modifyAny(actor, guildId, AuditEntry.ADMIN_ROLES, false, (serverInfo, audit) -> {
+            entries.clear();
+            Set<Long> old = new LinkedHashSet<>(serverInfo.adminRoles());
+            old.remove(null);
+            Set<Long> all = new LinkedHashSet<>(old);
+            all.addAll(wanted);
+            for (long roleId : all) {
+                AuditEntry entry = new AuditEntry(AuditEntry.ADMIN_ROLES);
+                entry.time = audit.time;
+                entry.subject = Value.role(roleId);
+                entry.change("adminRole", old.contains(roleId) ? Value.role(roleId) : null, wanted.contains(roleId) ? Value.role(roleId) : null);
+                if (entry.hasChanges()) entries.add(entry);
+            }
+            serverInfo.adminRoles = new ArrayList<>(wanted);
+            return null;
+        });
+        for (AuditEntry entry : entries) {
+            auditLog.record(guildId, actor, entry);
+        }
+    }
+
+    private void requireAdminRoleEditor(Access.MemberView editor) throws SettingsException {
+        if (editor == null || !access.canEditAdminRoles(editor)) {
+            throw new SettingsException("Only members with Discord's Administrator permission can change the admin roles.");
+        }
+    }
+
+    private static void validateAdminRole(long guildId, long roleId) throws SettingsException {
+        if (roleId <= 0L) throw new SettingsException("Invalid role.");
+        if (roleId == guildId) throw new SettingsException("The @everyone role can't be an admin role.");
+    }
+
+    // --- message customization rules ---
+
+    /**
+     * Adds a message customization rule for a role, or replaces the one it already has.
+     *
+     * @param mentionRoles the roles its members may mention
+     */
+    public void addMessageRule(Actor actor, long guildId, long roleId, boolean allowEveryone, List<Long> mentionRoles) throws SettingsException {
+        requireTwitchEnabled(guildId);
+        ServerInfo.MessageCustomizationRule rule = validateRule(guildId, new ServerInfo.MessageCustomizationRule(roleId, allowEveryone, mentionRoles));
+        modify(actor, guildId, AuditEntry.MESSAGE_RULES, (serverInfo, audit) -> {
+            List<ServerInfo.MessageCustomizationRule> rules = serverInfo.messageCustomizationRules();
+            rules.removeIf(Objects::isNull);
+            ServerInfo.MessageCustomizationRule existing = null;
+            for (ServerInfo.MessageCustomizationRule r : rules) {
+                if (r.roleId == roleId) {
+                    existing = r;
+                    break;
+                }
+            }
+            auditRule(audit, roleId, existing, rule);
+            if (existing == null) {
+                rules.add(rule);
+            } else {
+                existing.allowEveryone = rule.allowEveryone;
+                existing.allowedMentionRoles = new ArrayList<>(rule.allowedMentionRoles);
+            }
+            return null;
+        });
+    }
+
+    /**
+     * Removes a role's message customization rule. Templates its members already saved are kept and still post as
+     * written.
+     *
+     * @return whether the role had a rule
+     */
+    public boolean removeMessageRule(Actor actor, long guildId, long roleId) throws SettingsException {
+        requireTwitchEnabled(guildId);
+        if (roleId <= 0L) throw new SettingsException("Invalid role.");
+        return modify(actor, guildId, AuditEntry.MESSAGE_RULES, (serverInfo, audit) -> {
+            for (ServerInfo.MessageCustomizationRule rule : List.copyOf(serverInfo.messageCustomizationRules())) {
+                if (rule != null && rule.roleId == roleId) {
+                    serverInfo.messageCustomizationRules().remove(rule);
+                    auditRule(audit, roleId, rule, null);
+                    return true;
+                }
+            }
+            return false;
+        });
+    }
+
+    /**
+     * Replaces all message customization rules (for the dashboard). A role listed twice keeps its first rule.
+     */
+    public void setMessageRules(Actor actor, long guildId, List<ServerInfo.MessageCustomizationRule> newRules) throws SettingsException {
+        requireTwitchEnabled(guildId);
+        Map<Long, ServerInfo.MessageCustomizationRule> wanted = new LinkedHashMap<>();
+        for (ServerInfo.MessageCustomizationRule rule : newRules) {
+            ServerInfo.MessageCustomizationRule valid = validateRule(guildId, rule);
+            wanted.putIfAbsent(valid.roleId, valid);
+        }
+        List<AuditEntry> entries = new ArrayList<>();
+        modify(actor, guildId, AuditEntry.MESSAGE_RULES, (serverInfo, audit) -> {
+            entries.clear();
+            Map<Long, ServerInfo.MessageCustomizationRule> old = new LinkedHashMap<>();
+            for (ServerInfo.MessageCustomizationRule rule : serverInfo.messageCustomizationRules()) {
+                if (rule != null) old.putIfAbsent(rule.roleId, rule);
+            }
+            Set<Long> all = new LinkedHashSet<>(old.keySet());
+            all.addAll(wanted.keySet());
+            for (long roleId : all) {
+                AuditEntry entry = new AuditEntry(AuditEntry.MESSAGE_RULES);
+                entry.time = audit.time;
+                auditRule(entry, roleId, old.get(roleId), wanted.get(roleId));
+                if (entry.hasChanges()) entries.add(entry);
+            }
+            serverInfo.messageCustomizationRules = new ArrayList<>(wanted.values());
+            return null;
+        });
+        for (AuditEntry entry : entries) {
+            auditLog.record(guildId, actor, entry);
+        }
+    }
+
+    private static ServerInfo.MessageCustomizationRule validateRule(long guildId, ServerInfo.MessageCustomizationRule rule) throws SettingsException {
+        if (rule == null || rule.roleId <= 0L) throw new SettingsException("Invalid role.");
+        Set<Long> mentionRoles = new LinkedHashSet<>();
+        for (Long mentionRole : rule.allowedMentionRoles()) {
+            if (mentionRole == null || mentionRole <= 0L) throw new SettingsException("Invalid role to mention.");
+            if (mentionRole == guildId) {
+                throw new SettingsException("Use allow-everyone to let members mention @everyone and @here.");
+            }
+            mentionRoles.add(mentionRole);
+        }
+        return new ServerInfo.MessageCustomizationRule(rule.roleId, rule.allowEveryone, new ArrayList<>(mentionRoles));
+    }
+
+    /**
+     * Records a rule's changes as old → new: {@code before} null for a new rule, {@code after} null for a removed one.
+     */
+    private static void auditRule(AuditEntry audit, long roleId, ServerInfo.MessageCustomizationRule before, ServerInfo.MessageCustomizationRule after) {
+        audit.subject = Value.role(roleId);
+        audit.change("rule", before == null ? null : Value.role(roleId), after == null ? null : Value.role(roleId));
+        audit.change("allowEveryone",
+                before == null ? null : Value.bool(before.allowEveryone),
+                after == null ? null : Value.bool(after.allowEveryone));
+        Set<Long> oldRoles = before == null ? Set.of() : new LinkedHashSet<>(before.allowedMentionRoles());
+        Set<Long> newRoles = after == null ? Set.of() : new LinkedHashSet<>(after.allowedMentionRoles());
+        for (Long id : oldRoles) {
+            if (id != null && !newRoles.contains(id)) audit.change("mentionRole", Value.role(id), null);
+        }
+        for (Long id : newRoles) {
+            if (id != null && !oldRoles.contains(id)) audit.change("mentionRole", null, Value.role(id));
+        }
     }
 
     // --- self-service ---
@@ -811,6 +1099,12 @@ public class ServerSettings {
         if (template.isBlank()) {
             throw new SettingsException("The live message can't be empty.");
         }
+        int length = LiveMessage.exampleLength(template);
+        if (length > LiveMessage.MAX_LENGTH) {
+            throw new SettingsException("The live message is too long: with a long stream title it would be " + length
+                    + " characters, and Discord allows " + LiveMessage.MAX_LENGTH + ". Shorten it by "
+                    + (length - LiveMessage.MAX_LENGTH) + " characters.");
+        }
         return template;
     }
 
@@ -903,13 +1197,21 @@ public class ServerSettings {
      * for {@code actor} once the change is saved.
      */
     private <T> T modify(Actor actor, long guildId, String type, Change<T> change) throws SettingsException {
+        return modifyAny(actor, guildId, type, true, change);
+    }
+
+    /**
+     * {@link #modify}, optionally without the Twitch tracking check (for settings that aren't about Twitch, like the
+     * admin roles).
+     */
+    private <T> T modifyAny(Actor actor, long guildId, String type, boolean requireTwitch, Change<T> change) throws SettingsException {
         if (actor == null) throw new IllegalArgumentException("actor is required");
         AuditEntry audit = new AuditEntry(type);
         T result;
         try {
             result = store.modify(guildId, serverInfo -> {
                 try {
-                    if (!serverInfo.enabledTwitchTracking) {
+                    if (requireTwitch && !serverInfo.enabledTwitchTracking) {
                         throw new SettingsException(NOT_ENABLED);
                     }
                     audit.time = System.currentTimeMillis();

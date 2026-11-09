@@ -24,6 +24,16 @@ public class ServerInfo extends Data {
      * Self-added streamers who have been without a self-service role for this many days are removed. 0 means never.
      */
     public int selfServiceRemoveAfterDays = DEFAULT_SELF_SERVICE_REMOVE_AFTER_DAYS;
+    /**
+     * Roles whose members get full dashboard access, like members with Discord's Administrator permission. Missing
+     * means none.
+     */
+    public List<Long> adminRoles = new ArrayList<>();
+    /**
+     * Which non-admin streamers may write their own live message, and which pings it may contain. Missing means
+     * nobody but admins can.
+     */
+    public List<MessageCustomizationRule> messageCustomizationRules = new ArrayList<>();
 
     /**
      * The self-service roles, never null (a hand-edited file may have {@code "selfServiceRoles": null}).
@@ -31,6 +41,50 @@ public class ServerInfo extends Data {
     public List<SelfServiceRole> selfServiceRoles() {
         if (selfServiceRoles == null) selfServiceRoles = new ArrayList<>();
         return selfServiceRoles;
+    }
+
+    /**
+     * The admin roles, never null.
+     */
+    public List<Long> adminRoles() {
+        if (adminRoles == null) adminRoles = new ArrayList<>();
+        return adminRoles;
+    }
+
+    /**
+     * The message customization rules, never null.
+     */
+    public List<MessageCustomizationRule> messageCustomizationRules() {
+        if (messageCustomizationRules == null) messageCustomizationRules = new ArrayList<>();
+        return messageCustomizationRules;
+    }
+
+    /**
+     * Members with {@link #roleId} may edit their own live message. {@link #allowEveryone} lets them use
+     * {@code @everyone} and {@code @here}; {@link #allowedMentionRoles} are the roles they may mention. A member with
+     * several matching rules gets all of them combined.
+     */
+    public static class MessageCustomizationRule {
+        public long roleId;
+        public boolean allowEveryone;
+        public List<Long> allowedMentionRoles = new ArrayList<>();
+
+        public MessageCustomizationRule() {
+        }
+
+        public MessageCustomizationRule(long roleId, boolean allowEveryone, List<Long> allowedMentionRoles) {
+            this.roleId = roleId;
+            this.allowEveryone = allowEveryone;
+            this.allowedMentionRoles = allowedMentionRoles == null ? new ArrayList<>() : new ArrayList<>(allowedMentionRoles);
+        }
+
+        /**
+         * The allowed role mentions, never null.
+         */
+        public List<Long> allowedMentionRoles() {
+            if (allowedMentionRoles == null) allowedMentionRoles = new ArrayList<>();
+            return allowedMentionRoles;
+        }
     }
 
     public static class SelfServiceRole {
@@ -81,6 +135,11 @@ public class ServerInfo extends Data {
          * An admin set this self-added streamer's channel by hand, so it no longer follows their roles.
          */
         public boolean channelOverridePinned;
+        /**
+         * Discord user who last saved {@link #liveNotificationTemplate}, or 0 if unknown. Only for display and audit;
+         * posting doesn't check it.
+         */
+        public long templateSetBy;
 
         public boolean isSelfServicePaused() {
             return selfService && selfServiceLostAt != 0L;

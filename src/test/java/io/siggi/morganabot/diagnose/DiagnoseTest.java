@@ -425,4 +425,23 @@ class DiagnoseTest {
         streamer.selfService = false;
         assertNull(find(checks(run(), "1"), "selfService.paused"));
     }
+
+    @Test
+    void messageRuleRolesMustExist() {
+        info.messageCustomizationRules.add(new ServerInfo.MessageCustomizationRule(PING_ROLE, false, List.of(QUIET_ROLE)));
+        DiagnoseResult ok = run();
+        assertNull(find(ok.server, "messageRule.role.exists"));
+        assertNull(find(ok.server, "messageRule.mentionRole.exists"));
+
+        info.messageCustomizationRules.add(new ServerInfo.MessageCustomizationRule(998L, true, List.of(999L, LIVE_ROLE)));
+        DiagnoseResult result = run();
+        Check missingRole = find(result.server, "messageRule.role.exists");
+        assertNotNull(missingRole);
+        assertEquals(Level.WARNING, missingRole.level);
+        assertTrue(missingRole.message.contains("998"));
+        Check missingMention = find(result.server, "messageRule.mentionRole.exists");
+        assertNotNull(missingMention);
+        assertTrue(missingMention.message.contains("999"));
+        assertEquals(1, result.server.stream().filter(c -> c.code.equals("messageRule.mentionRole.exists")).count());
+    }
 }

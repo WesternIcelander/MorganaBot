@@ -56,12 +56,9 @@ public class Diagnose {
         };
     }
 
-    // An example Twitch stream title at Twitch's 140-character maximum, plus long game and streamer names, for the
-    // template length check.
-    static final String EXAMPLE_TITLE = "A very long example stream title, written to fill the whole 140 characters "
-            + "that Twitch allows for a stream title, just like this one, okay!!";
-    static final String EXAMPLE_GAME = "Example Game With A Rather Long Name: Deluxe Edition";
-    static final String EXAMPLE_STREAMER = "an_example_streamer_name_";
+    static final String EXAMPLE_TITLE = LiveMessage.EXAMPLE_TITLE;
+    static final String EXAMPLE_GAME = LiveMessage.EXAMPLE_GAME;
+    static final String EXAMPLE_STREAMER = LiveMessage.EXAMPLE_STREAMER;
 
     private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm 'UTC'").withZone(ZoneOffset.UTC);
 
@@ -134,6 +131,7 @@ public class Diagnose {
         server.addAll(liveRoleProblems);
 
         server.addAll(selfServiceChecks(guild, info));
+        server.addAll(messageRuleChecks(guild, info));
 
         if (info.streamers.isEmpty()) {
             server.add(Check.ok("streamers", "No streamers have been added yet."));
@@ -280,6 +278,31 @@ public class Diagnose {
                     "pick another channel for self-service role " + name)) {
                 checks.add(new Check(check.code, check.level == Level.ERROR ? Level.WARNING : check.level,
                         "Self-service role " + name + ": " + check.message, check.fix));
+            }
+        }
+        return checks;
+    }
+
+    /**
+     * Every role a message customization rule refers to (the rule's own role and the roles it lets members mention)
+     * still exists.
+     */
+    static List<Check> messageRuleChecks(GuildView guild, ServerInfo info) {
+        List<Check> checks = new ArrayList<>();
+        for (ServerInfo.MessageCustomizationRule rule : info.messageCustomizationRules()) {
+            if (rule == null) continue;
+            RoleView role = guild.role(rule.roleId);
+            String name = role == null ? "(deleted role " + rule.roleId + ")" : "@" + role.name();
+            if (role == null) {
+                checks.add(Check.warning("messageRule.role.exists", "A message permission rule's role (ID " + rule.roleId
+                                + ") doesn't exist any more, so nobody gets that rule.",
+                        "Remove the rule with /removemessagerole or in the dashboard."));
+            }
+            for (Long mentionRole : rule.allowedMentionRoles()) {
+                if (mentionRole == null || guild.role(mentionRole) != null) continue;
+                checks.add(Check.warning("messageRule.mentionRole.exists", "The message permission rule for " + name
+                                + " lets members mention a role (ID " + mentionRole + ") that doesn't exist any more.",
+                        "Update the rule with /addmessagerole or in the dashboard."));
             }
         }
         return checks;

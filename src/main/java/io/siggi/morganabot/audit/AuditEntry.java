@@ -33,6 +33,8 @@ public class AuditEntry {
     public static final String SELF_SERVICE_RESUME = "selfServiceResume";
     public static final String SELF_SERVICE_ROLES = "selfServiceRoles";
     public static final String SELF_SERVICE_EXPIRY = "selfServiceExpiry";
+    public static final String ADMIN_ROLES = "adminRoles";
+    public static final String MESSAGE_RULES = "messageRules";
 
     public static final String VISIBILITY_SERVER = "server";
     public static final String VISIBILITY_SUPER_ADMIN = "superAdmin";

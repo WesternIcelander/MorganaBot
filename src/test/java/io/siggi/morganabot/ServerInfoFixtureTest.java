@@ -18,6 +18,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -32,11 +33,13 @@ class ServerInfoFixtureTest {
     private static final String FIXTURE = "fixtures/server-v0.json";
 
     /**
-     * Optional fields added since v0 (step 7). Saving a v0 file writes them with their defaults; nothing else may
+     * Optional fields added since v0 (steps 7 and 8). Saving a v0 file writes them with their defaults; nothing else may
      * appear or disappear.
      */
-    private static final Set<String> ADDED_SERVER_KEYS = Set.of("selfServiceRoles", "selfServiceRemoveAfterDays");
-    private static final Set<String> ADDED_STREAMER_KEYS = Set.of("selfService", "addedBy", "selfServiceLostAt", "channelOverridePinned");
+    private static final Set<String> ADDED_SERVER_KEYS = Set.of("selfServiceRoles", "selfServiceRemoveAfterDays",
+            "adminRoles", "messageCustomizationRules");
+    private static final Set<String> ADDED_STREAMER_KEYS = Set.of("selfService", "addedBy", "selfServiceLostAt", "channelOverridePinned",
+            "templateSetBy");
 
     @TempDir
     Path tempDir;
@@ -96,7 +99,43 @@ class ServerInfoFixtureTest {
             assertEquals(0L, streamer.selfServiceLostAt);
             assertFalse(streamer.channelOverridePinned);
             assertFalse(streamer.isSelfServicePaused());
+            assertEquals(0L, streamer.templateSetBy);
         }
+        assertTrue(info.adminRoles().isEmpty());
+        assertTrue(info.messageCustomizationRules().isEmpty());
+    }
+
+    @Test
+    void accessFieldsRoundTrip() throws IOException {
+        File file = tempDir.resolve("access.json").toFile();
+        Files.writeString(file.toPath(), """
+                {
+                  "adminRoles": [1163991005738061976],
+                  "messageCustomizationRules": [{"roleId": 1163991005738061977, "allowEveryone": true, "allowedMentionRoles": [1163991005738061978]}],
+                  "streamers": [{"discordId": 200000000000000004, "twitchId": "44444444", "liveNotificationTemplate": "hi", "templateSetBy": 200000000000000005}]
+                }
+                """, StandardCharsets.UTF_8);
+        ServerInfo info = Data.read(file, ServerInfo.class, new Gson());
+        assertEquals(List.of(1163991005738061976L), info.adminRoles);
+        ServerInfo.MessageCustomizationRule rule = info.messageCustomizationRules.get(0);
+        assertEquals(1163991005738061977L, rule.roleId);
+        assertTrue(rule.allowEveryone);
+        assertEquals(List.of(1163991005738061978L), rule.allowedMentionRoles);
+        assertEquals(200000000000000005L, info.streamers.get(0).templateSetBy);
+        info.save();
+        ServerInfo again = Data.read(file, ServerInfo.class, new Gson());
+        assertEquals(1163991005738061976L, again.adminRoles.get(0));
+        assertEquals(1163991005738061978L, again.messageCustomizationRules.get(0).allowedMentionRoles.get(0));
+        assertEquals(200000000000000005L, again.streamers.get(0).templateSetBy);
+    }
+
+    @Test
+    void nullAccessListsAreTreatedAsEmpty() throws IOException {
+        File file = tempDir.resolve("null-access.json").toFile();
+        Files.writeString(file.toPath(), "{\"adminRoles\": null, \"messageCustomizationRules\": [{\"roleId\": 5, \"allowedMentionRoles\": null}]}", StandardCharsets.UTF_8);
+        ServerInfo info = Data.read(file, ServerInfo.class, new Gson());
+        assertTrue(info.adminRoles().isEmpty());
+        assertTrue(info.messageCustomizationRules().get(0).allowedMentionRoles().isEmpty());
     }
 
     private static JsonElement parse(File file) throws IOException {

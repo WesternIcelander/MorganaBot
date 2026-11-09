@@ -30,6 +30,8 @@ import net.dv8tion.jda.api.entities.Role;
 import net.dv8tion.jda.api.entities.UserSnowflake;
 import net.dv8tion.jda.api.entities.channel.middleman.GuildChannel;
 import net.dv8tion.jda.api.entities.channel.middleman.StandardGuildMessageChannel;
+import net.dv8tion.jda.api.entities.Message;
+import net.dv8tion.jda.api.requests.restaction.MessageCreateAction;
 import net.dv8tion.jda.api.exceptions.ErrorResponseException;
 import net.dv8tion.jda.api.requests.ErrorResponse;
 
@@ -46,6 +48,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedList;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -311,6 +314,7 @@ public class TwitchStreamerWatcher {
         }
         String streamerId;
         String streamerName;
+        String streamerLogin;
         boolean goingOnline;
         try {
             JsonObject notificationObject = JsonParser.parseString(new String(requestData, StandardCharsets.UTF_8)).getAsJsonObject();
@@ -330,6 +334,9 @@ public class TwitchStreamerWatcher {
             String streamType = event.has("type") && !event.get("type").isJsonNull() ? event.get("type").getAsString() : null;
             streamerId = event.get("broadcaster_user_id").getAsString();
             streamerName = event.get("broadcaster_user_name").getAsString();
+            // The login is what twitch.tv URLs use; the display name can contain characters that aren't valid there.
+            streamerLogin = event.has("broadcaster_user_login") && !event.get("broadcaster_user_login").isJsonNull()
+                    ? event.get("broadcaster_user_login").getAsString() : streamerName.toLowerCase(java.util.Locale.ROOT);
             goingOnline = eventType.equals("stream.online");
             if (goingOnline && !"live".equals(streamType)) return;
         } catch (Exception e) {
@@ -337,7 +344,7 @@ public class TwitchStreamerWatcher {
             return;
         }
         try {
-            notificationExecutor.execute(() -> processNotification(streamerId, streamerName, goingOnline, now));
+            notificationExecutor.execute(() -> processNotification(streamerId, streamerName, streamerLogin, goingOnline, now));
         } catch (Exception e) {
             // Only when stopping.
             System.err.println("Dropped notification for " + streamerName + ": " + e);
@@ -363,11 +370,11 @@ public class TwitchStreamerWatcher {
      * Handles one online/offline event. Runs on the notification executor, one at a time per streamer, after the
      * streamer's earlier sends and deletes have finished.
      */
-    private void processNotification(String streamerId, String streamerName, boolean goingOnline, long now) {
+    private void processNotification(String streamerId, String streamerName, String streamerLogin, boolean goingOnline, long now) {
         String kind = goingOnline ? "online" : "offline";
         try {
             boolean waited = streamerQueue.run(streamerId, IN_FLIGHT_WAIT,
-                    () -> processNotificationLocked(streamerId, streamerName, goingOnline, now));
+                    () -> processNotificationLocked(streamerId, streamerName, streamerLogin, goingOnline, now));
             if (!waited) {
                 health.log(Component.DISCORD, Severity.WARNING, "Timed out waiting for an earlier Discord action for "
                         + streamerName + " before handling the " + kind + " notification", null);
@@ -378,7 +385,7 @@ public class TwitchStreamerWatcher {
         }
     }
 
-    private void processNotificationLocked(String streamerId, String streamerName, boolean goingOnline, long now) throws IOException {
+    private void processNotificationLocked(String streamerId, String streamerName, String streamerLogin, boolean goingOnline, long now) throws IOException {
         JDA jda = bot.getJDA();
         if (jda == null) {
             health.log(Component.DISCORD, Severity.WARNING, "Dropped a Twitch " + (goingOnline ? "online" : "offline")
@@ -431,7 +438,7 @@ public class TwitchStreamerWatcher {
             for (ServerInfo.Streamer streamer : serverInfo.streamers) {
                 if (skip(streamer, streamerId, goingOnline)) continue;
                 if (streamerId.equals(streamer.twitchId)) {
-                    handleLiveNotification(jda, guild, serverInfo, streamer, streamerId, streamerName, channelInfo, goingOnline, postMessages.get(i++));
+                    handleLiveNotification(jda, guild, serverInfo, streamer, streamerId, streamerName, streamerLogin, channelInfo, goingOnline, postMessages.get(i++));
                 }
             }
         }
@@ -445,7 +452,7 @@ public class TwitchStreamerWatcher {
         return goingOnline && streamerId.equals(streamer.twitchId) && streamer.isSelfServicePaused();
     }
 
-    private void handleLiveNotification(JDA jda, Guild guild, ServerInfo serverInfo, ServerInfo.Streamer streamer, String streamerId, String streamerName, JsonObject channelInfo, boolean goingOnline, boolean postMessage) {
+    private void handleLiveNotification(JDA jda, Guild guild, ServerInfo serverInfo, ServerInfo.Streamer streamer, String streamerId, String streamerName, String streamerLogin, JsonObject channelInfo, boolean goingOnline, boolean postMessage) {
         long guildId = guild.getIdLong();
         Problem.Target streamerTarget = Problem.Target.streamer(streamerId, streamerName);
 
@@ -512,9 +519,9 @@ public class TwitchStreamerWatcher {
                     recordProblem(guildId, new Problem(Problem.SEND_LIVE_MESSAGE, channelTarget, streamerTarget, "Not posted: " + channelProblem));
                     return;
                 }
-                String liveMessage = LiveMessage.fill(LiveMessage.templateFor(serverInfo, streamer),
+                LiveMessage.Filled liveMessage = LiveMessage.build(LiveMessage.templateFor(serverInfo, streamer),
                         channelInfo.get("game_name").getAsString(), channelInfo.get("title").getAsString(),
-                        streamerName, streamer.discordId);
+                        streamerName, streamerLogin, streamer.discordId);
                 String finalChannelName = channelName;
                 // A later notification for this streamer (e.g. offline) waits until this send and the save of its
                 // message ID are done, so it can delete the new post.
@@ -528,7 +535,7 @@ public class TwitchStreamerWatcher {
                     }
                 };
                 try {
-                    channel.sendMessage(liveMessage).setSuppressedNotifications(silent).queue(message -> {
+                    sendLiveMessage(channel, liveMessage).setSuppressedNotifications(silent).queue(message -> {
                         // Save against the current data, not the snapshot taken before sending, so changes made
                         // in the meantime aren't reverted. If the streamer was removed meanwhile, do nothing.
                         try {
@@ -563,6 +570,27 @@ public class TwitchStreamerWatcher {
      * Deletes a previous live post. Once it's gone (deleted now, or already missing), the stored ID is cleared so
      * the next go-live doesn't try to delete it again.
      */
+    /**
+     * The live post, pinging exactly the mentions written in the template text (nothing from Twitch).
+     */
+    static MessageCreateAction sendLiveMessage(StandardGuildMessageChannel channel, LiveMessage.Filled liveMessage) {
+        MessageCreateAction action = channel.sendMessage(liveMessage.text());
+        return action.setAllowedMentions(allowedMentionTypes(liveMessage))
+                .mentionRoles(liveMessage.mentions().roles().stream().map(String::valueOf).toArray(String[]::new))
+                .mentionUsers(liveMessage.users().stream().map(String::valueOf).toArray(String[]::new));
+    }
+
+    /**
+     * The mention types that may ping: {@code @everyone}/{@code @here} only if the template has them. Role and user
+     * mentions are allowed one by one instead.
+     */
+    static EnumSet<Message.MentionType> allowedMentionTypes(LiveMessage.Filled liveMessage) {
+        EnumSet<Message.MentionType> types = EnumSet.noneOf(Message.MentionType.class);
+        if (liveMessage.mentions().everyone()) types.add(Message.MentionType.EVERYONE);
+        if (liveMessage.mentions().here()) types.add(Message.MentionType.HERE);
+        return types;
+    }
+
     private void deleteLiveMessage(long guildId, StandardGuildMessageChannel channel, Problem.Target channelTarget, String channelName,
                                    String channelProblem, String streamerId, Problem.Target streamerTarget, long messageId) {
         String action = Problem.DELETE_LIVE_MESSAGE;

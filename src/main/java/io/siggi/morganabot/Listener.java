@@ -72,6 +72,22 @@ public class Listener extends ListenerAdapter {
                     TwitchCommandHandler.removeSelfServiceRole(bot, event);
                 }
                 break;
+                case "addadminrole": {
+                    TwitchCommandHandler.addAdminRole(bot, event);
+                }
+                break;
+                case "removeadminrole": {
+                    TwitchCommandHandler.removeAdminRole(bot, event);
+                }
+                break;
+                case "addmessagerole": {
+                    TwitchCommandHandler.addMessageRole(bot, event);
+                }
+                break;
+                case "removemessagerole": {
+                    TwitchCommandHandler.removeMessageRole(bot, event);
+                }
+                break;
                 case "setselfserviceexpiry": {
                     TwitchCommandHandler.setSelfServiceExpiry(bot, event);
                 }
