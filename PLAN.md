@@ -437,12 +437,16 @@ Every file under `data/` must keep loading after a deploy, with nothing lost and
 These need real Discord accounts and roles, a Twitch streamer actually going live to the public HTTPS endpoint, and a copy of production data, so an agent can't do them. They're plain bullets, not checkboxes, so `run-plan` doesn't pick them up. Each step's own automated checks are described in CLAUDE.md.
 
 - **Login:** `/dashboard` shows a button, not a URL. After clicking it, the reply changes to "Logged in ✓" with no button. Unused, it changes to "Link expired" after 30 seconds. A second click on a used link and a link older than 30 seconds are both rejected. The address bar shows `/dashboard/` with no token.
-- **Basics:** Run `/dashboard`, log in, change every setting, check that the matching command output agrees, and check that a second login link and an expired token are both rejected. Problems and Diagnose:
+- **Basics:** Run `/dashboard`, log in, change every setting, check that the matching command output agrees, and check that a second login link and an expired token are both rejected.
+
+Problems and Diagnose:
 - Remove the bot's Send Messages permission in the live channel with a channel override only, delete the live role, and move the live role above the bot's role. Check that each one shows up in Diagnose **without anyone going live**, and in the recorded failures after a live event.
 - Put a non-mentionable role and `@everyone` in a streamer's template without giving the bot Mention Everyone: Diagnose warns about both. Make the role mentionable: the role warning clears.
 - Give one streamer an override channel the bot can't see: only that streamer shows an error.
-- Point a streamer at an announcement channel: Diagnose flags it until the Known bugs fix lands, after which it posts.
-- Auto-publish: with a second server following the announcement channel, a live alert shows up there. Turn auto-publish off for that channel: the next alert stays local. A silent repost within the cooldown is never published. System health:
+- Point a streamer at an announcement channel: the live alert posts there, and Diagnose shows no error for it.
+- Auto-publish: with a second server following the announcement channel, a live alert shows up there. Turn auto-publish off for that channel: the next alert stays local. A silent repost within the cooldown is never published.
+
+System health:
 - Put a wrong Twitch client secret in a copy of the config and check that Twitch API turns red with the reason and a super admin DM arrives. Restore it, and check that recovery is shown and DM'd.
 - Use an invalid Discord token: startup doesn't crash, the stdout recovery link works, and the System page shows Discord red with "fix and restart".
 - Disable the members intent in the dev portal and check that `DISALLOWED_INTENTS` is shown.
