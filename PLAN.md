@@ -15,4 +15,4 @@
 
 ## Notes
 
-- Uncommitted on main: user's JDA bump 6.5.0 → 6.7.0 in `pom.xml` (not mine; left alone).
+- JDA bumped 6.5.0 → 6.7.0 — `c1bf04e`
