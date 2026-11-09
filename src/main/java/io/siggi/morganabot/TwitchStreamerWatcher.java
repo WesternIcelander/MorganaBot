@@ -7,6 +7,7 @@ import com.google.gson.JsonParser;
 import io.siggi.morganabot.config.AuthCache;
 import io.siggi.morganabot.config.Configuration;
 import io.siggi.morganabot.config.ServerInfo;
+import io.siggi.morganabot.config.ServerInfoStore;
 import io.siggi.morganabot.util.EndpointCaller;
 import io.siggi.morganabot.util.MapBuilder;
 import io.siggi.morganabot.util.Util;
@@ -183,26 +184,44 @@ public class TwitchStreamerWatcher {
             if (goingOnline) {
                 channelInfo = getChannelInformation(streamerId);
             }
+            ServerInfoStore store = bot.getServerInfoStore();
             for (Guild guild : guilds) {
-                ServerInfo serverInfo = bot.getServerInfo(guild.getIdLong());
-                for (ServerInfo.Streamer streamer : serverInfo.streamers) {
-                    if (streamerId.equals(streamer.twitchId)) {
-                        boolean postMessage = true;
-                        if (goingOnline) {
-                            if (streamer.startedStreaming == 0L) {
-                                if (now - streamer.stoppedStreaming < serverInfo.streamNotificationCooldown) {
-                                    postMessage = false;
+                // Update the streaming state under the guild's lock, and take a snapshot to act on afterwards.
+                List<Boolean> postMessages = new ArrayList<>();
+                ServerInfo serverInfo;
+                try {
+                    serverInfo = store.modify(guild.getIdLong(), info -> {
+                        for (ServerInfo.Streamer streamer : info.streamers) {
+                            if (streamerId.equals(streamer.twitchId)) {
+                                boolean postMessage = true;
+                                if (goingOnline) {
+                                    if (streamer.startedStreaming == 0L) {
+                                        if (now - streamer.stoppedStreaming < info.streamNotificationCooldown) {
+                                            postMessage = false;
+                                        }
+                                    }
+                                    streamer.startedStreaming = now;
+                                } else {
+                                    if (streamer.startedStreaming != 0L) {
+                                        streamer.startedStreaming = 0L;
+                                        streamer.stoppedStreaming = now;
+                                    }
                                 }
-                            }
-                            streamer.startedStreaming = now;
-                        } else {
-                            if (streamer.startedStreaming != 0L) {
-                                streamer.startedStreaming = 0L;
-                                streamer.stoppedStreaming = now;
+                                postMessages.add(postMessage);
                             }
                         }
-                        serverInfo.save();
-                        handleLiveNotification(jda, guild, serverInfo, streamer, streamerId, streamerName, channelInfo, goingOnline, postMessage);
+                        return postMessages.isEmpty() ? null : store.copy(info);
+                    });
+                } catch (Exception e) {
+                    // One guild's unreadable file mustn't stop notifications for the others.
+                    e.printStackTrace();
+                    continue;
+                }
+                if (serverInfo == null) continue;
+                int i = 0;
+                for (ServerInfo.Streamer streamer : serverInfo.streamers) {
+                    if (streamerId.equals(streamer.twitchId)) {
+                        handleLiveNotification(jda, guild, serverInfo, streamer, streamerId, streamerName, channelInfo, goingOnline, postMessages.get(i++));
                     }
                 }
             }
@@ -257,8 +276,17 @@ public class TwitchStreamerWatcher {
                             .replace("${twitch_link}", "https://www.twitch.tv/" + streamerName)
                             .replace("${discord_name}", discordMention);
                     textChannel.sendMessage(liveMessage).setSuppressedNotifications(silent).submit(true).thenAccept((message) -> {
-                        streamer.lastLiveNotificationId = message.getIdLong();
-                        serverInfo.save();
+                        // Save against the current data, not the snapshot taken before sending, so changes made
+                        // in the meantime aren't reverted. If the streamer was removed meanwhile, do nothing.
+                        bot.getServerInfoStore().modify(guild.getIdLong(), info -> {
+                            for (ServerInfo.Streamer current : info.streamers) {
+                                if (streamerId.equals(current.twitchId)) {
+                                    current.lastLiveNotificationId = message.getIdLong();
+                                    break;
+                                }
+                            }
+                            return null;
+                        });
                     });
             }
         } else {
@@ -334,7 +362,14 @@ public class TwitchStreamerWatcher {
         Map<String, StreamerInfo> streamerInfos = new HashMap<>();
         List<Guild> guilds = bot.getJDA().getGuilds();
         for (Guild guild : guilds) {
-            ServerInfo serverInfo = bot.getServerInfo(guild.getIdLong());
+            ServerInfo serverInfo;
+            try {
+                serverInfo = bot.getServerInfoStore().get(guild.getIdLong());
+            } catch (Exception e) {
+                // Unreadable server file: skip it rather than stopping the whole sync loop.
+                e.printStackTrace();
+                continue;
+            }
             for (ServerInfo.Streamer streamer : serverInfo.streamers) {
                 StreamerInfo streamerInfo = streamerInfos.get(streamer.twitchId);
                 if (streamerInfo == null) {

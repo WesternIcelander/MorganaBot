@@ -4,7 +4,7 @@ import com.google.gson.Gson;
 import io.siggi.morganabot.config.AuthCache;
 import io.siggi.morganabot.config.Configuration;
 import io.siggi.morganabot.config.Data;
-import io.siggi.morganabot.config.ServerInfo;
+import io.siggi.morganabot.config.ServerInfoStore;
 import io.siggi.morganabot.config.UserData;
 import io.siggi.morganabot.util.Util;
 import io.siggi.processapi.ProcessAPI;
@@ -50,6 +50,7 @@ public class MorganaBot {
     private TwitchStreamerWatcher twitchStreamerWatcher;
     private Configuration configuration;
     private AuthCache authCache;
+    private ServerInfoStore serverInfoStore;
 
     public Gson getGson() {
         return gson;
@@ -63,8 +64,8 @@ public class MorganaBot {
         return authCache;
     }
 
-    public ServerInfo getServerInfo(long serverId) {
-        return Data.read(new File(Util.getDataRoot(), "servers/" + serverId + ".json"), ServerInfo.class, gson);
+    public ServerInfoStore getServerInfoStore() {
+        return serverInfoStore;
     }
 
     public UserData getUserData(long userId) {
@@ -77,6 +78,7 @@ public class MorganaBot {
         gson = new Gson();
         configuration = Data.read(new File(Util.getDataRoot(), "config.json"), Configuration.class, gson);
         authCache = Data.read(new File(Util.getDataRoot(), "auth-cache.json"), AuthCache.class, gson);
+        serverInfoStore = new ServerInfoStore(new File(Util.getDataRoot(), "servers"), gson);
         webHandler = new WebHandler(this);
         webHandler.start();
         JDABuilder builder = JDABuilder.createDefault(configuration.discord.token);
