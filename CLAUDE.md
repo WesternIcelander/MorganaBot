@@ -6,6 +6,7 @@ Discord bot (Java 17, Maven, JDA 6) that posts in Discord channels when Twitch s
 
 - `mvn package` → `target/MorganaBot.jar` (shaded). `mvn -q -o compile` for a quick check.
 - No tests exist.
+- The Discord token in `data/config.json` belongs to a **developer** bot account, not the production bot. It's safe to run the bot locally with it for testing.
 
 ## Layout (`src/main/java/io/siggi/morganabot/`)
 
