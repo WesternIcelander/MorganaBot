@@ -1,6 +1,7 @@
 package io.siggi.morganabot;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonObject;
 import io.siggi.morganabot.config.AuthCache;
 import io.siggi.morganabot.config.Configuration;
 import io.siggi.morganabot.config.Data;
@@ -18,6 +19,7 @@ import net.dv8tion.jda.api.interactions.commands.OptionType;
 import net.dv8tion.jda.api.interactions.commands.build.Commands;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.Locale;
 
 public class MorganaBot {
@@ -51,6 +53,7 @@ public class MorganaBot {
     private Configuration configuration;
     private AuthCache authCache;
     private ServerInfoStore serverInfoStore;
+    private ServerSettings serverSettings;
 
     public Gson getGson() {
         return gson;
@@ -68,6 +71,10 @@ public class MorganaBot {
         return serverInfoStore;
     }
 
+    public ServerSettings getServerSettings() {
+        return serverSettings;
+    }
+
     public UserData getUserData(long userId) {
         return Data.read(new File(Util.getDataRoot(), "users/" + userId + ".json"), UserData.class, gson);
     }
@@ -79,6 +86,23 @@ public class MorganaBot {
         configuration = Data.read(new File(Util.getDataRoot(), "config.json"), Configuration.class, gson);
         authCache = Data.read(new File(Util.getDataRoot(), "auth-cache.json"), AuthCache.class, gson);
         serverInfoStore = new ServerInfoStore(new File(Util.getDataRoot(), "servers"), gson);
+        serverSettings = new ServerSettings(serverInfoStore, new ServerSettings.Twitch() {
+            @Override
+            public ServerSettings.TwitchUser findUserByLogin(String login) throws IOException {
+                JsonObject user = twitchStreamerWatcher.getStreamerInfoByUsername(login);
+                if (user == null) return null;
+                return new ServerSettings.TwitchUser(
+                        user.get("id").getAsString(),
+                        user.get("login").getAsString(),
+                        user.get("display_name").getAsString()
+                );
+            }
+
+            @Override
+            public void triggerUpdate() {
+                twitchStreamerWatcher.triggerUpdate();
+            }
+        });
         webHandler = new WebHandler(this);
         webHandler.start();
         JDABuilder builder = JDABuilder.createDefault(configuration.discord.token);
@@ -119,7 +143,7 @@ public class MorganaBot {
                 Commands.slash("setchanneloverride", "Set a channel override for a streamer")
                         .addOption(OptionType.STRING, "twitch-name", "What's their name on Twitch?", false)
                         .addOption(OptionType.USER, "discord-name", "What's their name on Discord?", false)
-                        .addOption(OptionType.STRING, "channel", "What channel should we post in? Leave blank to remove the override", false)
+                        .addOption(OptionType.CHANNEL, "channel", "What channel should we post in? Leave blank to remove the override", false)
                         .setDefaultPermissions(DefaultMemberPermissions.DISABLED),
                 Commands.slash("streamerlist", "Get a list of streamers in this Discord!")
         ).queue();

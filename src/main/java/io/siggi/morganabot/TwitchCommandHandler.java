@@ -1,338 +1,228 @@
 package io.siggi.morganabot;
 
 import com.google.gson.JsonObject;
+import io.siggi.morganabot.ServerSettings.SettingsException;
+import io.siggi.morganabot.ServerSettings.StreamerRef;
 import io.siggi.morganabot.config.ServerInfo;
 import io.siggi.morganabot.util.Util;
 import net.dv8tion.jda.api.entities.User;
 import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent;
-import net.dv8tion.jda.api.interactions.Interaction;
-import net.dv8tion.jda.api.interactions.callbacks.IReplyCallback;
 import net.dv8tion.jda.api.interactions.commands.OptionMapping;
 
-import java.io.IOException;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
-import java.util.TreeSet;
 
+/**
+ * Slash commands for the Twitch features. These only parse options and format replies; the settings themselves are
+ * validated and changed by {@link ServerSettings}.
+ */
 public class TwitchCommandHandler {
-    static void addStreamer(MorganaBot bot, SlashCommandInteractionEvent event) {
-        try {
-            long guildId = event.getGuild().getIdLong();
-            if (!bot.getServerInfoStore().get(guildId).enabledTwitchTracking) {
-                event.reply("This feature is not enabled for this Discord server. Contact <@260595748465278976> if you believe this is a mistake.").setEphemeral(true).queue();
-                return;
-            }
-            OptionMapping twitchMapping = event.getInteraction().getOption("twitch-name");
-            String twitchName = twitchMapping == null ? null : twitchMapping.getAsString();
-            OptionMapping discordMapping = event.getInteraction().getOption("discord-name");
-            User discordUser = discordMapping == null ? null : discordMapping.getAsUser();
-            OptionMapping channelMapping = event.getInteraction().getOption("post-in-channel");
-            long selectedChannel = getChannelId(channelMapping);
-            if (twitchName == null) {
-                event.reply("Whoops!").setEphemeral(true).queue();
-                return;
-            }
-            long discordUserId = discordUser == null ? 0L : discordUser.getIdLong();
-            JsonObject streamerInfoByUsername = bot.getTwitchStreamerWatcher().getStreamerInfoByUsername(twitchName);
-            String streamerUsername = streamerInfoByUsername.get("display_name").getAsString();
-            String streamerId = streamerInfoByUsername.get("id").getAsString();
-            String error = bot.getServerInfoStore().modify(guildId, serverInfo -> {
-                for (ServerInfo.Streamer streamer : serverInfo.streamers) {
-                    if (streamerId.equals(streamer.twitchId)) {
-                        return "The specified Twitch user is already added as a streamer!";
-                    } else if (discordUserId != 0L && discordUserId == streamer.discordId) {
-                        return "The specified Discord user is already added as a streamer!";
-                    }
-                }
-                ServerInfo.Streamer streamer = new ServerInfo.Streamer(discordUserId, streamerId);
-                streamer.channelToPostLiveNotifications = selectedChannel;
-                serverInfo.streamers.add(streamer);
-                return null;
-            });
-            if (error != null) {
-                event.reply(error).setEphemeral(true).queue();
-                return;
-            }
-            bot.getTwitchStreamerWatcher().triggerUpdate();
-            event.reply("Added " + Util.markdownEscape(streamerUsername) + " / " + "<@" + discordUserId + "> as a Twitch streamer" + (selectedChannel != 0L ? (" in <#" + selectedChannel + ">") : "")).setEphemeral(true).queue();
-        } catch (Exception e) {
-            e.printStackTrace();
-            event.reply("There was a problem executing that command, try again!").setEphemeral(true).queue();
-        }
+
+    static final String LIVE_MESSAGE_HELP = "Available variables: ${game_name}, ${stream_name}, ${streamer_name}, ${twitch_link}, ${discord_name}\n\nTo insert line breaks in a message, use \\n";
+
+    @FunctionalInterface
+    private interface Action {
+        String run() throws Exception;
     }
 
     /**
-     * Which streamer a command refers to: the Discord user ID (0 if not given) and the Twitch ID (null if not
-     * given or not found). Looked up before taking the server lock, since it may call the Twitch API.
+     * Runs {@code action} and replies (ephemeral) with what it returns, the {@link SettingsException} message, or a
+     * generic error.
      */
-    private record StreamerQuery(long discordUserId, String twitchId) {
+    private static void handle(SlashCommandInteractionEvent event, Action action) {
+        String reply;
+        try {
+            reply = action.run();
+        } catch (SettingsException e) {
+            reply = e.getMessage();
+        } catch (Exception e) {
+            e.printStackTrace();
+            reply = "There was a problem executing that command, try again!";
+        }
+        event.reply(reply).setEphemeral(true).queue();
     }
 
-    private static StreamerQuery getStreamerQuery(MorganaBot bot, OptionMapping twitchMapping, OptionMapping discordMapping, IReplyCallback event) throws IOException {
-        String twitchName = twitchMapping == null ? null : twitchMapping.getAsString();
-        User discordUser = discordMapping == null ? null : discordMapping.getAsUser();
-        if (twitchName == null && discordUser == null) {
-            event.reply("You need to specify either their Twitch name or Discord name!").setEphemeral(true).queue();
-            return null;
-        }
-        long discordUserId = discordUser == null ? 0L : discordUser.getIdLong();
-        JsonObject streamerInfoByUsername = twitchName == null ? null : bot.getTwitchStreamerWatcher().getStreamerInfoByUsername(twitchName);
-        String streamerId = streamerInfoByUsername == null ? null : streamerInfoByUsername.get("id").getAsString();
-        return new StreamerQuery(discordUserId, streamerId);
-    }
-
-    private static ServerInfo.Streamer findStreamer(ServerInfo serverInfo, StreamerQuery query) {
-        for (ServerInfo.Streamer streamer : serverInfo.streamers) {
-            if (streamer.discordId == query.discordUserId() || (streamer.twitchId != null && streamer.twitchId.equals(query.twitchId()))) {
-                return streamer;
-            }
-        }
-        return null;
+    static void addStreamer(MorganaBot bot, SlashCommandInteractionEvent event) {
+        handle(event, () -> {
+            long guildId = event.getGuild().getIdLong();
+            String twitchName = getString(event, "twitch-name");
+            long discordUserId = getUserId(event, "discord-name");
+            long channelId = getChannelId(event, "post-in-channel");
+            ServerSettings.TwitchUser user = bot.getServerSettings().addStreamer(guildId, twitchName, discordUserId, channelId);
+            return "Added " + Util.markdownEscape(user.displayName())
+                    + (discordUserId != 0L ? " / <@" + discordUserId + ">" : "")
+                    + " as a Twitch streamer"
+                    + (channelId != 0L ? " in <#" + channelId + ">" : "");
+        });
     }
 
     static void deleteStreamer(MorganaBot bot, SlashCommandInteractionEvent event) {
-        try {
+        handle(event, () -> {
             long guildId = event.getGuild().getIdLong();
-            if (!bot.getServerInfoStore().get(guildId).enabledTwitchTracking) {
-                event.reply("This feature is not enabled for this Discord server. Contact <@260595748465278976> if you believe this is a mistake.").setEphemeral(true).queue();
-                return;
-            }
-            OptionMapping twitchMapping = event.getInteraction().getOption("twitch-name");
-            OptionMapping discordMapping = event.getInteraction().getOption("discord-name");
-            StreamerQuery query = getStreamerQuery(bot, twitchMapping, discordMapping, event);
-            if (query == null) {
-                return;
-            }
-            Long deletedDiscordId = bot.getServerInfoStore().modify(guildId, serverInfo -> {
-                ServerInfo.Streamer streamer = findStreamer(serverInfo, query);
-                if (streamer == null) return null;
-                serverInfo.streamers.remove(streamer);
-                return streamer.discordId;
-            });
-            if (deletedDiscordId == null) {
-                event.reply("No such streamer was found!").setEphemeral(true).queue();
-                return;
-            }
-            bot.getTwitchStreamerWatcher().triggerUpdate();
-            event.reply("Deleted <@" + deletedDiscordId + ">").setEphemeral(true).queue();
-        } catch (Exception e) {
-            e.printStackTrace();
-            event.reply("There was a problem executing that command, try again!").setEphemeral(true).queue();
-        }
+            ServerInfo.Streamer removed = bot.getServerSettings().deleteStreamer(guildId, getStreamerRef(event));
+            return "Deleted " + describe(removed, event);
+        });
     }
 
     static void setChannelOverride(MorganaBot bot, SlashCommandInteractionEvent event) {
-        try {
+        handle(event, () -> {
             long guildId = event.getGuild().getIdLong();
-            if (!bot.getServerInfoStore().get(guildId).enabledTwitchTracking) {
-                event.reply("This feature is not enabled for this Discord server. Contact <@260595748465278976> if you believe this is a mistake.").setEphemeral(true).queue();
-                return;
-            }
-            OptionMapping twitchMapping = event.getInteraction().getOption("twitch-name");
-            OptionMapping discordMapping = event.getInteraction().getOption("discord-name");
-            OptionMapping channelMapping = event.getInteraction().getOption("channel");
-            long channelToPostLiveNotifications = getChannelId(channelMapping);
-            StreamerQuery query = getStreamerQuery(bot, twitchMapping, discordMapping, event);
-            if (query == null) {
-                return;
-            }
-            Long streamerDiscordId = bot.getServerInfoStore().modify(guildId, serverInfo -> {
-                ServerInfo.Streamer streamer = findStreamer(serverInfo, query);
-                if (streamer == null) return null;
-                streamer.channelToPostLiveNotifications = channelToPostLiveNotifications;
-                return streamer.discordId;
-            });
-            if (streamerDiscordId == null) {
-                event.reply("No such streamer was found!").setEphemeral(true).queue();
-                return;
-            }
-            bot.getTwitchStreamerWatcher().triggerUpdate();
-            if (channelToPostLiveNotifications == 0L) {
-                event.reply("Removed override for <@" + streamerDiscordId + ">").setEphemeral(true).queue();
+            long channelId = getChannelId(event, "channel");
+            ServerInfo.Streamer streamer = bot.getServerSettings().setChannelOverride(guildId, getStreamerRef(event), channelId);
+            if (channelId == 0L) {
+                return "Removed override for " + describe(streamer, event);
             } else {
-                event.reply("Set override for <@" + streamerDiscordId + "> to <#" + channelToPostLiveNotifications + ">").setEphemeral(true).queue();
+                return "Set override for " + describe(streamer, event) + " to <#" + channelId + ">";
             }
-        } catch (Exception e) {
-            e.printStackTrace();
-            event.reply("There was a problem executing that command, try again!").setEphemeral(true).queue();
-        }
+        });
     }
 
     static void setStreamerRole(MorganaBot bot, SlashCommandInteractionEvent event) {
-        try {
-            long guildId = event.getGuild().getIdLong();
-            if (!bot.getServerInfoStore().get(guildId).enabledTwitchTracking) {
-                event.reply("This feature is not enabled for this Discord server. Contact <@260595748465278976> if you believe this is a mistake.").setEphemeral(true).queue();
-                return;
-            }
-            OptionMapping roleMapping = event.getInteraction().getOption("role");
-            long roleForLiveUsers = roleMapping == null ? 0L : roleMapping.getAsLong();
-            bot.getServerInfoStore().modify(guildId, serverInfo -> serverInfo.roleForLiveUsers = roleForLiveUsers);
-            event.reply("Streamer role was set to <@&" + roleForLiveUsers + ">").setEphemeral(true).queue();
-        } catch (Exception e) {
-            e.printStackTrace();
-            event.reply("There was a problem executing that command, try again!").setEphemeral(true).queue();
-        }
+        handle(event, () -> {
+            OptionMapping roleMapping = event.getOption("role");
+            long roleId = roleMapping == null ? 0L : roleMapping.getAsRole().getIdLong();
+            bot.getServerSettings().setLiveRole(event.getGuild().getIdLong(), roleId);
+            return "Streamer role was set to <@&" + roleId + ">";
+        });
     }
 
     static void setLiveChannel(MorganaBot bot, SlashCommandInteractionEvent event) {
-        try {
-            long guildId = event.getGuild().getIdLong();
-            if (!bot.getServerInfoStore().get(guildId).enabledTwitchTracking) {
-                event.reply("This feature is not enabled for this Discord server. Contact <@260595748465278976> if you believe this is a mistake.").setEphemeral(true).queue();
-                return;
-            }
-            OptionMapping channelMapping = event.getInteraction().getOption("channel");
-            long channelToPostLiveNotifications = getChannelId(channelMapping);
-            bot.getServerInfoStore().modify(guildId, serverInfo -> serverInfo.channelToPostLiveNotifications = channelToPostLiveNotifications);
-            event.reply("Live channel was set to <#" + channelToPostLiveNotifications + ">").setEphemeral(true).queue();
-        } catch (Exception e) {
-            e.printStackTrace();
-            event.reply("There was a problem executing that command, try again!").setEphemeral(true).queue();
-        }
+        handle(event, () -> {
+            long channelId = getChannelId(event, "channel");
+            bot.getServerSettings().setLiveChannel(event.getGuild().getIdLong(), channelId);
+            return "Live channel was set to <#" + channelId + ">";
+        });
     }
 
     static void setDeleteOnOffline(MorganaBot bot, SlashCommandInteractionEvent event) {
-        try {
-            long guildId = event.getGuild().getIdLong();
-            if (!bot.getServerInfoStore().get(guildId).enabledTwitchTracking) {
-                event.reply("This feature is not enabled for this Discord server. Contact <@260595748465278976> if you believe this is a mistake.").setEphemeral(true).queue();
-                return;
+        handle(event, () -> {
+            OptionMapping deleteMapping = event.getOption("delete");
+            if (deleteMapping == null) {
+                return "You need to choose whether to delete notifications!";
             }
-            OptionMapping deleteMapping = event.getInteraction().getOption("delete");
-            boolean deleteNotificationsOnOffline = deleteMapping.getAsBoolean();
-            bot.getServerInfoStore().modify(guildId, serverInfo -> serverInfo.deleteNotificationsOnOffline = deleteNotificationsOnOffline);
-            event.reply("Set delete notifications on offline: " + deleteNotificationsOnOffline).setEphemeral(true).queue();
-        } catch (Exception e) {
-            e.printStackTrace();
-            event.reply("There was a problem executing that command, try again!").setEphemeral(true).queue();
-        }
+            boolean delete = deleteMapping.getAsBoolean();
+            bot.getServerSettings().setDeleteOnOffline(event.getGuild().getIdLong(), delete);
+            return "Set delete notifications on offline: " + delete;
+        });
     }
 
     static void setLiveMessage(MorganaBot bot, SlashCommandInteractionEvent event) {
-        try {
+        handle(event, () -> {
             long guildId = event.getGuild().getIdLong();
-            if (!bot.getServerInfoStore().get(guildId).enabledTwitchTracking) {
-                event.reply("This feature is not enabled for this Discord server. Contact <@260595748465278976> if you believe this is a mistake.").setEphemeral(true).queue();
-                return;
-            }
-            OptionMapping messageMapping = event.getInteraction().getOption("message");
-            String message = messageMapping == null ? null : messageMapping.getAsString();
-            OptionMapping discordNameMapping = event.getInteraction().getOption("discord-name");
-            User discordUser = discordNameMapping == null ? null : discordNameMapping.getAsUser();
+            String message = getString(event, "message");
+            long discordUserId = getUserId(event, "discord-name");
             if (message != null) {
                 message = message.replace("\\n", "\n");
                 if (message.equals("default") || message.equals("reset")) {
                     message = null;
                 } else if (message.equals("help")) {
-                    event.reply("Available variables: ${game_name}, ${stream_name}, ${streamer_name}, ${twitch_link}, ${discord_name}\n\nTo insert line breaks in a message, use \\n").setEphemeral(true).queue();
-                    return;
+                    return LIVE_MESSAGE_HELP;
                 }
             }
-            String template = message;
-            String replyMessage = bot.getServerInfoStore().modify(guildId, serverInfo -> {
-                ServerInfo.Streamer streamer = null;
-                if (discordUser != null) {
-                    for (ServerInfo.Streamer s : serverInfo.streamers) {
-                        if (s.discordId == discordUser.getIdLong()) {
-                            streamer = s;
-                            break;
-                        }
-                    }
-                    if (streamer == null) {
-                        return "Specified user is not added as a streamer.";
-                    }
-                }
-                if (streamer != null) {
-                    streamer.liveNotificationTemplate = template;
-                    return "Updated user-specific notification template for <@" + discordUser.getIdLong() + ">!";
-                } else {
-                    serverInfo.liveNotificationTemplate = template;
-                    return "Updated server-wide notification template!";
-                }
-            });
-            event.reply(replyMessage).setEphemeral(true).queue();
-        } catch (Exception e) {
-            e.printStackTrace();
-            event.reply("There was a problem executing that command, try again!").setEphemeral(true).queue();
-        }
+            if (discordUserId != 0L) {
+                bot.getServerSettings().setStreamerTemplate(guildId, new StreamerRef(null, discordUserId), message);
+                return "Updated user-specific notification template for <@" + discordUserId + ">!";
+            } else {
+                bot.getServerSettings().setServerTemplate(guildId, message);
+                return "Updated server-wide notification template!";
+            }
+        });
     }
 
     static void getStreamerList(MorganaBot bot, SlashCommandInteractionEvent event) {
-        try {
-            ServerInfo serverInfo = bot.getServerInfoStore().get(event.getGuild().getIdLong());
-            if (!serverInfo.enabledTwitchTracking) {
-                event.reply("This feature is not enabled for this Discord server. Contact <@260595748465278976> if you believe this is a mistake.").setEphemeral(true).queue();
-                return;
-            }
+        handle(event, () -> {
+            ServerInfo serverInfo = bot.getServerSettings().requireTwitchEnabled(event.getGuild().getIdLong());
             List<String> ids = new ArrayList<>();
             for (ServerInfo.Streamer streamer : serverInfo.streamers) {
                 ids.add(streamer.twitchId);
             }
-            Map<String, JsonObject> multipleStreamerInfosByIds = bot.getTwitchStreamerWatcher().getMultipleStreamerInfosByIds(ids);
-            TreeSet<String> alphabeticalStreamers = new TreeSet<>(String::compareToIgnoreCase);
-            Map<String, JsonObject> streamersByName = new HashMap<>();
-            for (Map.Entry<String,JsonObject> entry : multipleStreamerInfosByIds.entrySet()) {
-                String streamerName = entry.getValue().get("display_name").getAsString();
-                alphabeticalStreamers.add(streamerName);
-                streamersByName.put(streamerName, entry.getValue());
-            }
-            StringBuilder sb = new StringBuilder();
-            sb.append("Streamers in this server:\n\n");
-            for (String streamerName : alphabeticalStreamers) {
-                JsonObject jsonObject = streamersByName.get(streamerName);
-                String twitchId = jsonObject.get("id").getAsString();
-                ServerInfo.Streamer streamer = null;
-                for (ServerInfo.Streamer s : serverInfo.streamers) {
-                    if (twitchId.equals(s.twitchId)) {
-                        streamer = s;
-                        break;
-                    }
-                }
-                sb.append("- [");
-                sb.append(streamerName);
-                sb.append("](");
-                sb.append("<https://www.twitch.tv/").append(streamerName);
-                sb.append(">)\n");
-                if (streamer != null) {
-                    if (streamer.discordId == 0L) {
-                        sb.append("  - Discord: unset\n");
-                    } else {
-                        sb.append("  - Discord: <@").append(streamer.discordId).append(">\n");
-                    }
-                    if (streamer.stoppedStreaming > 0L) {
-                        sb.append("  - Last stream: <t:").append(streamer.stoppedStreaming / 1000L).append(":f>\n");
-                    }
-                    if (streamer.channelToPostLiveNotifications != 0L) {
-                        sb.append("  - Posts in: <#").append(streamer.channelToPostLiveNotifications).append(">\n");
-                    }
-                }
-            }
-            if (ids.isEmpty()) {
-                sb.append("Nobody is here! Add someone using `/addstreamer`!");
-            }
-            String message = sb.toString();
-            event.reply(message).setEphemeral(true).queue();
-        } catch (Exception e) {
-            e.printStackTrace();
-            event.reply("There was a problem executing that command, try again!").setEphemeral(true).queue();
-        }
+            Map<String, JsonObject> twitchUsers = ids.isEmpty() ? Map.of() : bot.getTwitchStreamerWatcher().getMultipleStreamerInfosByIds(ids);
+            return formatStreamerList(serverInfo.streamers, twitchUsers);
+        });
     }
 
-    private static long getChannelId(OptionMapping channelMapping) {
-        if (channelMapping == null) return 0L;
-        try {
-            return channelMapping.getAsLong();
-        } catch (NumberFormatException e) {
-            // This is to get around a bug in JDA where it will sometimes include the <# part of the channel ID when
-            // parsing the 64bit integer wrapped around <# and >
-            String string = channelMapping.getAsString();
-            int offset = string.indexOf("#") + 1;
-            int endOffset = string.indexOf(">");
-            if (endOffset == -1) endOffset = string.length();
-            return Long.parseLong(string.substring(offset, endOffset));
+    /**
+     * Builds the {@code /streamerlist} reply, sorted by Twitch display name. Links use the Twitch login, since display
+     * names can contain characters (e.g. non-Latin scripts) that aren't valid in a twitch.tv URL.
+     *
+     * @param twitchUsers Twitch user objects (with {@code id}, {@code login}, {@code display_name}) by Twitch ID
+     */
+    static String formatStreamerList(List<ServerInfo.Streamer> streamers, Map<String, JsonObject> twitchUsers) {
+        if (streamers.isEmpty()) {
+            return "Streamers in this server:\n\nNobody is here! Add someone using `/addstreamer`!";
         }
+        record Row(ServerInfo.Streamer streamer, String displayName, String login) {
+        }
+        List<Row> rows = new ArrayList<>();
+        for (ServerInfo.Streamer streamer : streamers) {
+            JsonObject user = streamer.twitchId == null ? null : twitchUsers.get(streamer.twitchId);
+            if (user == null) {
+                rows.add(new Row(streamer, null, null));
+            } else {
+                rows.add(new Row(streamer, user.get("display_name").getAsString(), user.get("login").getAsString()));
+            }
+        }
+        rows.sort(Comparator.comparing((Row row) -> row.displayName() == null)
+                .thenComparing(row -> row.displayName() == null ? "" : row.displayName(), String::compareToIgnoreCase));
+        StringBuilder sb = new StringBuilder();
+        sb.append("Streamers in this server:\n\n");
+        for (Row row : rows) {
+            ServerInfo.Streamer streamer = row.streamer();
+            if (row.login() == null) {
+                sb.append("- Unknown Twitch account (ID ").append(streamer.twitchId).append(")\n");
+            } else {
+                sb.append("- [").append(Util.markdownEscape(row.displayName())).append("](")
+                        .append("<https://www.twitch.tv/").append(row.login()).append(">)\n");
+            }
+            if (streamer.discordId == 0L) {
+                sb.append("  - Discord: unset\n");
+            } else {
+                sb.append("  - Discord: <@").append(streamer.discordId).append(">\n");
+            }
+            if (streamer.stoppedStreaming > 0L) {
+                sb.append("  - Last stream: <t:").append(streamer.stoppedStreaming / 1000L).append(":f>\n");
+            }
+            if (streamer.channelToPostLiveNotifications != 0L) {
+                sb.append("  - Posts in: <#").append(streamer.channelToPostLiveNotifications).append(">\n");
+            }
+        }
+        return sb.toString();
+    }
+
+    // --- option parsing ---
+
+    private static StreamerRef getStreamerRef(SlashCommandInteractionEvent event) {
+        return new StreamerRef(getString(event, "twitch-name"), getUserId(event, "discord-name"));
+    }
+
+    /**
+     * How a reply names a streamer: their Discord mention, or their Twitch name from the command if they have no
+     * linked Discord user.
+     */
+    private static String describe(ServerInfo.Streamer streamer, SlashCommandInteractionEvent event) {
+        if (streamer.discordId != 0L) {
+            return "<@" + streamer.discordId + ">";
+        }
+        String twitchName = getString(event, "twitch-name");
+        return twitchName != null ? Util.markdownEscape(twitchName.trim()) : "Twitch user " + streamer.twitchId;
+    }
+
+    private static String getString(SlashCommandInteractionEvent event, String name) {
+        OptionMapping mapping = event.getOption(name);
+        return mapping == null ? null : mapping.getAsString();
+    }
+
+    private static long getUserId(SlashCommandInteractionEvent event, String name) {
+        OptionMapping mapping = event.getOption(name);
+        if (mapping == null) return 0L;
+        User user = mapping.getAsUser();
+        return user.getIdLong();
+    }
+
+    private static long getChannelId(SlashCommandInteractionEvent event, String name) {
+        OptionMapping mapping = event.getOption(name);
+        return mapping == null ? 0L : mapping.getAsChannel().getIdLong();
     }
 }
