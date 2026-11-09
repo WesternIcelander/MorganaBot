@@ -21,6 +21,10 @@ Discord bot (Java 17, Maven, JDA 6) that posts in Discord channels when Twitch s
 
 Twitch features are gated per guild by `enabledTwitchTracking`, which is only set by hand-editing the server JSON.
 
+## Settings policy
+
+Every per-server setting must be changeable from the web dashboard. Nobody should need to edit `data/servers/*.json` by hand. If you add a per-server setting, add it to the dashboard too. `config.json` (URL, port, tokens, Twitch credentials, `superAdmins`) stays file-only.
+
 ## Data compatibility
 
 Production runs on the current `data/` format. Any change to stored data must keep old files loading, with an automatic migration if the change isn't additive. Prefer new optional fields with safe defaults. For renames or restructures, add a `dataVersion`, migrate on load, and write a `.bak` copy before the first migrated save. Server JSON files are hand-edited on production while the bot runs (e.g. `enabledTwitchTracking`), so any caching must notice those edits and reload. Details are in PLAN.md → Data compatibility.

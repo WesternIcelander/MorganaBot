@@ -6,7 +6,11 @@
 
 ## Web dashboard
 
-Goal: a web UI that can read and change everything about a server. Anything a command can change, the web UI can change too. Access is granted by a new `/dashboard` command, which only server admins can use by default.
+Goal: a web UI that can read and change everything about a server. Anything a command can change, the web UI can change too.
+
+**Nobody should need to edit server files by hand.** Every per-server setting must be changeable from the web UI. That includes settings no command can change today: the notification cooldown, a streamer's linked Discord user, and (super admin only) the Twitch on/off switch. If a per-server setting is added later, it gets a place in the UI too.
+
+**`config.json` stays file-only, by the user's choice.** It holds the public URL, the port, the Discord token, the Twitch credentials and `superAdmins`. These are set at install and rarely change, so there's no UI for them. User timezones stay per-user via `/timezone`. Access is granted by a new `/dashboard` command, which only server admins can use by default.
 
 ### What the UI covers
 
@@ -55,7 +59,7 @@ Every file under `data/` must keep loading after a deploy, with nothing lost and
   - Before the first migrated save, write a backup copy (`<name>.json.v<old>.bak`).
   - Add a migration test using a copy of today's format.
   - Write up the change here before doing it.
-- **Hand-editing must keep working.** Today `enabledTwitchTracking` is turned on by editing the server JSON on production while the bot runs. That works now because every access reads the file fresh. Step 1's cache would silently ignore those edits, and then overwrite them on the next save. So the store must notice when the file's modified time changes on disk and reload it before using or saving it.
+- **Hand-editing must keep working until the UI replaces it.** Today `enabledTwitchTracking` is turned on by editing the server JSON on production while the bot runs. After step 9 that's no longer needed, but the reload stays as a cheap safety net. That works now because every access reads the file fresh. Step 1's cache would silently ignore those edits, and then overwrite them on the next save. So the store must notice when the file's modified time changes on disk and reload it before using or saving it.
 - **Deploy note:** add `superAdmins` to the production `config.json` before or with the deploy that includes step 5. Otherwise there's no super admin, and the "not enabled, contact …" message loses its contact.
 - **Before deploying, test against real data:** run the new build on a copy of the production `data/` directory, not just the dev data. Check that every server, streamer, template and user timezone loads and shows up unchanged, and that saving doesn't drop any fields.
 
