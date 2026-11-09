@@ -19,6 +19,8 @@ export class ProblemsPanel {
     private twitchMessage: string | null = null;
     private error: string | null = null;
     private running = false;
+    /** Whether the admin opened the minimized all-passed view, so a re-run after a save doesn't close it again. */
+    private passedOpen = false;
     private listeners: { listener: Listener; owner: HTMLElement | null }[] = [];
     /** Bumped on every Diagnose run, so a slow one can't replace a newer result. */
     private run = 0;
@@ -108,7 +110,16 @@ export class ProblemsPanel {
         const body: Child[] = [];
         if (this.twitchMessage !== null) body.push(h("p", { class: "notice warn" }, this.twitchMessage));
         if (this.error !== null) body.push(h("p", { class: "notice error" }, this.error));
-        body.push(this.diagnoseSection(result));
+        if (!anything && result !== null && this.error === null) {
+            // Everything passed: minimized to one line, details on click.
+            const passed = h("details", { class: "health-passed", open: this.passedOpen },
+                h("summary", null, levelBadge("OK"), " All checks passed. ", h("span", { class: "muted" }, result.summary)),
+                this.diagnoseSection(result));
+            passed.addEventListener("toggle", () => { this.passedOpen = passed.open; });
+            body.push(passed);
+        } else {
+            body.push(this.diagnoseSection(result));
+        }
         if (this.problems.length > 0) body.push(this.failuresSection());
         this.element.classList.toggle("has-problems", anything);
         replace(this.element, head, body);
