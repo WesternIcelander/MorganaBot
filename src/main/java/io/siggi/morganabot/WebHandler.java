@@ -1,9 +1,12 @@
 package io.siggi.morganabot;
 
 import io.siggi.morganabot.config.Configuration;
+import io.siggi.morganabot.dashboard.DashboardSession;
+import io.siggi.morganabot.dashboard.LoginEndpoints;
 import io.siggi.morganabot.health.Health;
 import io.siggi.http.HTTPServer;
 import io.siggi.http.HTTPServerBuilder;
+import io.siggi.http.session.Sessions;
 
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -31,7 +34,9 @@ public class WebHandler {
         if (started) return;
         started = true;
         serverSocket = new ServerSocket(configuration.apiPort);
-        httpServer = new HTTPServerBuilder().build();
+        // Dashboard sessions: in memory (a restart logs everyone out), 24 hours since last use.
+        httpServer = new HTTPServerBuilder().setSessions(Sessions.create(DashboardSession.SESSION_TTL)).build();
+        new LoginEndpoints(bot.getLoginTokens()).register(httpServer);
         (thread = new Thread(() -> {
             try {
                 while (true) {

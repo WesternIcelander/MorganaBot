@@ -10,6 +10,9 @@ import io.siggi.morganabot.config.Data;
 import io.siggi.morganabot.config.ServerInfoStore;
 import io.siggi.morganabot.config.ServerInfo;
 import io.siggi.morganabot.config.UserData;
+import io.siggi.morganabot.dashboard.DashboardCommand;
+import io.siggi.morganabot.dashboard.LoginTokenStore;
+import io.siggi.morganabot.dashboard.RecoveryLogin;
 import io.siggi.morganabot.health.Component;
 import io.siggi.morganabot.health.ComponentStatus;
 import io.siggi.morganabot.health.DiscordHealthListener;
@@ -51,6 +54,9 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 public class MorganaBot {
     private static int termCount = 0;
@@ -96,6 +102,12 @@ public class MorganaBot {
     private AuditLog auditLog;
     private ServerProblems serverProblems;
     private Diagnose diagnose;
+    private LoginTokenStore loginTokens;
+    private DashboardCommand dashboardCommand;
+    private RecoveryLogin recoveryLogin;
+    private ScheduledExecutorService recoveryChecker;
+    /** Set when connecting to Discord failed (cleared once it's ready), for the recovery login link. */
+    private volatile boolean discordFailed = false;
 
     public Gson getGson() {
         return gson;
@@ -138,6 +150,17 @@ public class MorganaBot {
 
     public Diagnose getDiagnose() {
         return diagnose;
+    }
+
+    /**
+     * Single-use dashboard login tokens ({@code /dashboard} and the console recovery link).
+     */
+    public LoginTokenStore getLoginTokens() {
+        return loginTokens;
+    }
+
+    public DashboardCommand getDashboardCommand() {
+        return dashboardCommand;
     }
 
     /**
@@ -238,6 +261,12 @@ public class MorganaBot {
         serverSettings.setMembers(SelfServiceListener.members(this::getJDA));
         serverSettings.setAccess(new Access(serverInfoStore, configuration.superAdmins));
         diagnose = new Diagnose(this);
+        loginTokens = new LoginTokenStore();
+        loginTokens.start();
+        dashboardCommand = new DashboardCommand(loginTokens, getAccess(), configuration.apiEndpoint);
+        Long firstSuperAdmin = getAccess().firstSuperAdmin();
+        recoveryLogin = new RecoveryLogin(loginTokens, configuration.apiEndpoint,
+                firstSuperAdmin == null ? 0L : firstSuperAdmin, System.out, System::currentTimeMillis);
         // The web server and the Twitch watcher don't need Discord to start, and the system status must stay
         // reachable when Discord is down. The watcher's guild loops wait for Discord themselves.
         webHandler = new WebHandler(this);
@@ -248,6 +277,31 @@ public class MorganaBot {
         Thread connector = new Thread(this::connectDiscord, "Discord connect");
         discordConnectThread = connector;
         connector.start();
+        recoveryChecker = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "Recovery login");
+            t.setDaemon(true);
+            return t;
+        });
+        recoveryChecker.scheduleWithFixedDelay(this::checkRecoveryLogin, 30L, 30L, TimeUnit.SECONDS);
+    }
+
+    /**
+     * Prints the console recovery login link while Discord is down: connecting failed, or the Discord card is red
+     * (e.g. the token was rejected while running, or a long disconnect).
+     */
+    private void checkRecoveryLogin() {
+        try {
+            if (stopping) return;
+            boolean down = discordFailed || systemHealth.status(Component.DISCORD).state() == State.RED;
+            recoveryLogin.check(down);
+        } catch (Exception e) {
+            Health.unexpected("Recovery login check failed", e);
+        }
+    }
+
+    private void discordFailed() {
+        discordFailed = true;
+        checkRecoveryLogin();
     }
 
     /**
@@ -259,6 +313,7 @@ public class MorganaBot {
         String token = configuration.discord == null ? null : configuration.discord.token;
         if (token == null || token.isBlank()) {
             systemHealth.problem(Component.DISCORD, State.RED, "No Discord bot token in config.json (discord.token). Set it and restart.", null);
+            discordFailed();
             return;
         }
         while (!stopping) {
@@ -282,12 +337,14 @@ public class MorganaBot {
                 }
                 jda = attempt;
                 registerCommands(attempt);
+                discordFailed = false;
                 discordReady.countDown();
                 return;
             } catch (InvalidTokenException e) {
                 systemHealth.problem(Component.DISCORD, State.RED,
                         "Discord rejected the bot token. Fix discord.token in config.json and restart.", null);
                 shutdownQuietly(attempt);
+                discordFailed();
                 return;
             } catch (InterruptedException e) {
                 shutdownQuietly(attempt);
@@ -297,11 +354,13 @@ public class MorganaBot {
                 if (stopping) return;
                 if (discordHealthListener.fatalCloseCode() != null) {
                     // Already shown as red with a "fix and restart" message.
+                    discordFailed();
                     return;
                 }
                 systemHealth.problem(Component.DISCORD, State.AMBER, "Could not connect to Discord: " + Health.describe(e),
                         e, DiscordHealthListener.LONG_DISCONNECT, "Could not connect to Discord for more than 5 minutes");
                 systemHealth.detail(Component.DISCORD, "nextConnectAttempt", System.currentTimeMillis() + backoff);
+                discordFailed();
                 try {
                     Thread.sleep(backoff);
                 } catch (InterruptedException ie) {
@@ -397,7 +456,9 @@ public class MorganaBot {
                         .addOption(OptionType.ROLE, "role", "Which role?", true)
                         .setContexts(InteractionContextType.GUILD)
                         .setDefaultPermissions(DefaultMemberPermissions.DISABLED),
-                Commands.slash("streamerlist", "Get a list of streamers in this Discord!")
+                Commands.slash("streamerlist", "Get a list of streamers in this Discord!"),
+                Commands.slash("dashboard", "Log in to the MorganaBot web dashboard")
+                        .setContexts(InteractionContextType.GUILD, InteractionContextType.BOT_DM)
         ).queue(null, error -> Health.log(Component.DISCORD, Severity.ERROR,
                 "Could not register slash commands: " + Health.describe(error), error));
     }
@@ -483,6 +544,8 @@ public class MorganaBot {
             } catch (Exception ignored) {
             }
         }
+        if (recoveryChecker != null) recoveryChecker.shutdownNow();
+        if (loginTokens != null) loginTokens.stop();
         if (systemHealth != null) systemHealth.stop();
     }
 

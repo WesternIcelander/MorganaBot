@@ -93,6 +93,13 @@ public class Access {
         this.superAdmins = Collections.unmodifiableSet(set);
     }
 
+    /**
+     * The first super admin in config, or null if there are none.
+     */
+    public Long firstSuperAdmin() {
+        return superAdmins.isEmpty() ? null : superAdmins.iterator().next();
+    }
+
     public boolean isSuperAdmin(long userId) {
         return superAdmins.contains(userId);
     }

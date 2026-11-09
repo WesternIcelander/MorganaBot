@@ -52,6 +52,17 @@ class AccessTest {
     }
 
     @Test
+    void notEnabledMessageNamesFirstSuperAdmin() {
+        assertEquals(SUPER, access.firstSuperAdmin());
+        assertNull(new Access(store, List.of()).firstSuperAdmin());
+        assertNull(new Access(store, null).firstSuperAdmin());
+        assertEquals(5L, new Access(store, List.of(5L, 6L)).firstSuperAdmin());
+        assertEquals("This feature is not enabled for this Discord server. Contact <@999> if you believe this is a mistake.",
+                ServerSettings.notEnabledMessage(SUPER));
+        assertEquals("This feature is not enabled for this Discord server.", ServerSettings.notEnabledMessage(null));
+    }
+
+    @Test
     void levels() {
         assertEquals(Level.ADMIN, access.of(member(300L, true)));
         assertEquals(Level.ADMIN, access.of(member(300L, false, ADMIN_ROLE)));

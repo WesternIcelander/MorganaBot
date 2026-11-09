@@ -131,16 +131,16 @@ class ServerSettingsTest {
     void everyChangeIsRefusedWhenTwitchIsOff() {
         store.modify(GUILD, info -> info.enabledTwitchTracking = false);
         String before = new Gson().toJson(store.get(GUILD));
-        assertMessage(ServerSettings.NOT_ENABLED, () -> settings.addStreamer(ACTOR, GUILD, "dave", 0L, 0L));
-        assertMessage(ServerSettings.NOT_ENABLED, () -> settings.deleteStreamer(ACTOR, GUILD, new StreamerRef("bob", 0L)));
-        assertMessage(ServerSettings.NOT_ENABLED, () -> settings.setChannelOverride(ACTOR, GUILD, new StreamerRef("bob", 0L), 5L));
-        assertMessage(ServerSettings.NOT_ENABLED, () -> settings.setLiveChannel(ACTOR, GUILD, 5L));
-        assertMessage(ServerSettings.NOT_ENABLED, () -> settings.setLiveRole(ACTOR, GUILD, 5L));
-        assertMessage(ServerSettings.NOT_ENABLED, () -> settings.setDeleteOnOffline(ACTOR, GUILD, true));
-        assertMessage(ServerSettings.NOT_ENABLED, () -> settings.setNotificationCooldown(ACTOR, GUILD, 5L));
-        assertMessage(ServerSettings.NOT_ENABLED, () -> settings.setServerTemplate(ACTOR, GUILD, "x"));
-        assertMessage(ServerSettings.NOT_ENABLED, () -> settings.setStreamerTemplate(ACTOR, GUILD, new StreamerRef(null, 201L), "x"));
-        assertMessage(ServerSettings.NOT_ENABLED, () -> settings.requireTwitchEnabled(GUILD));
+        assertMessage(settings.notEnabledMessage(), () -> settings.addStreamer(ACTOR, GUILD, "dave", 0L, 0L));
+        assertMessage(settings.notEnabledMessage(), () -> settings.deleteStreamer(ACTOR, GUILD, new StreamerRef("bob", 0L)));
+        assertMessage(settings.notEnabledMessage(), () -> settings.setChannelOverride(ACTOR, GUILD, new StreamerRef("bob", 0L), 5L));
+        assertMessage(settings.notEnabledMessage(), () -> settings.setLiveChannel(ACTOR, GUILD, 5L));
+        assertMessage(settings.notEnabledMessage(), () -> settings.setLiveRole(ACTOR, GUILD, 5L));
+        assertMessage(settings.notEnabledMessage(), () -> settings.setDeleteOnOffline(ACTOR, GUILD, true));
+        assertMessage(settings.notEnabledMessage(), () -> settings.setNotificationCooldown(ACTOR, GUILD, 5L));
+        assertMessage(settings.notEnabledMessage(), () -> settings.setServerTemplate(ACTOR, GUILD, "x"));
+        assertMessage(settings.notEnabledMessage(), () -> settings.setStreamerTemplate(ACTOR, GUILD, new StreamerRef(null, 201L), "x"));
+        assertMessage(settings.notEnabledMessage(), () -> settings.requireTwitchEnabled(GUILD));
         assertEquals(before, new Gson().toJson(store.get(GUILD)));
         assertEquals(0, twitch.updates);
         assertTrue(twitch.lookups.isEmpty(), "no Twitch lookups for a disabled server");

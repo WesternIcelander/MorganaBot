@@ -1,6 +1,7 @@
 {
   "apiEndpoint": "https://morgana.yourdomain.com",
   "apiPort": 8080,
+  "superAdmins": [],
   "discord": {
     "token": "Discord-bot-token-goes-here"
   },

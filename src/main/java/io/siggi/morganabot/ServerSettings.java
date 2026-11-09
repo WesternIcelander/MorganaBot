@@ -132,7 +132,16 @@ public class ServerSettings {
     // shorter, so only the character set and maximum are enforced).
     private static final Pattern TWITCH_LOGIN = Pattern.compile("[A-Za-z0-9_]{1,25}");
 
-    static final String NOT_ENABLED = "This feature is not enabled for this Discord server. Contact <@260595748465278976> if you believe this is a mistake.";
+    /**
+     * The "Twitch is off for this server" message. It names the first super admin from config as the contact, and
+     * leaves the contact out if there are none.
+     */
+    static String notEnabledMessage(Long contact) {
+        if (contact == null || contact == 0L) {
+            return "This feature is not enabled for this Discord server.";
+        }
+        return "This feature is not enabled for this Discord server. Contact <@" + contact + "> if you believe this is a mistake.";
+    }
 
     static final String NO_SELF_SERVICE_ROLE = "You don't have a role that lets you add yourself as a streamer in this server. Ask an admin to add you.";
 
@@ -184,6 +193,13 @@ public class ServerSettings {
         this.members = members == null ? Members.NONE : members;
     }
 
+    /**
+     * The "not enabled" message with this bot's contact (the first super admin).
+     */
+    public String notEnabledMessage() {
+        return notEnabledMessage(access.firstSuperAdmin());
+    }
+
     void setClock(LongSupplier clock) {
         this.clock = clock;
     }
@@ -194,7 +210,7 @@ public class ServerSettings {
     public ServerInfo requireTwitchEnabled(long guildId) throws SettingsException {
         ServerInfo info = store.get(guildId);
         if (!info.enabledTwitchTracking) {
-            throw new SettingsException(NOT_ENABLED);
+            throw new SettingsException(notEnabledMessage());
         }
         return info;
     }
@@ -1212,7 +1228,7 @@ public class ServerSettings {
             result = store.modify(guildId, serverInfo -> {
                 try {
                     if (requireTwitch && !serverInfo.enabledTwitchTracking) {
-                        throw new SettingsException(NOT_ENABLED);
+                        throw new SettingsException(notEnabledMessage());
                     }
                     audit.time = System.currentTimeMillis();
                     return change.apply(serverInfo, audit);

@@ -280,8 +280,8 @@ class MessagePermissionsTest {
     void adminRolesDontNeedTwitch() throws Exception {
         store.modify(GUILD, info -> info.enabledTwitchTracking = false);
         assertTrue(settings.addAdminRole(ADMIN_ACTOR, member(301L, true), 50L));
-        assertMessage(ServerSettings.NOT_ENABLED, () -> settings.addMessageRule(ADMIN_ACTOR, GUILD, 70L, false, List.of()));
-        assertMessage(ServerSettings.NOT_ENABLED, () -> settings.setOwnTemplate(self(STREAMER), member(STREAMER, false, VIP), "x"));
+        assertMessage(settings.notEnabledMessage(), () -> settings.addMessageRule(ADMIN_ACTOR, GUILD, 70L, false, List.of()));
+        assertMessage(settings.notEnabledMessage(), () -> settings.setOwnTemplate(self(STREAMER), member(STREAMER, false, VIP), "x"));
     }
 
     // --- message rules ---

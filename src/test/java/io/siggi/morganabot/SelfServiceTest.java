@@ -183,8 +183,8 @@ class SelfServiceTest {
     @Test
     void selfSetWhenTwitchIsOffIsRefused() {
         store.modify(GUILD, info -> info.enabledTwitchTracking = false);
-        assertMessage(ServerSettings.NOT_ENABLED, () -> settings.selfSetTwitch(self(USER), member(USER, VIP), "alice"));
-        assertMessage(ServerSettings.NOT_ENABLED, () -> settings.selfRemove(self(USER), GUILD, USER));
+        assertMessage(settings.notEnabledMessage(), () -> settings.selfSetTwitch(self(USER), member(USER, VIP), "alice"));
+        assertMessage(settings.notEnabledMessage(), () -> settings.selfRemove(self(USER), GUILD, USER));
         assertTrue(twitch.lookups.isEmpty());
     }
 

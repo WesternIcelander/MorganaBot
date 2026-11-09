@@ -88,6 +88,10 @@ public class Listener extends ListenerAdapter {
                     TwitchCommandHandler.removeMessageRole(bot, event);
                 }
                 break;
+                case "dashboard": {
+                    bot.getDashboardCommand().handle(event);
+                }
+                break;
                 case "setselfserviceexpiry": {
                     TwitchCommandHandler.setSelfServiceExpiry(bot, event);
                 }
