@@ -159,7 +159,7 @@ Every file under `data/` must keep loading after a deploy, with nothing lost and
   - `GET …/channels` (text channels only), `GET …/roles` (marking roles the bot can't assign because they're above its own role)
   - `GET …/members?q=`
   - `GET …/streamers` (adds Twitch display name and login, fetched in batches), `POST …/streamers`, `PATCH …/streamers/{twitchId}`, `DELETE …/streamers/{twitchId}`
-  - `GET …/self-service`, `PUT …/self-service` (the whole role → channel list; each role and channel is checked to belong to the guild).
+  - `GET …/self-service`, `PUT …/self-service` (the whole role → channel list plus `removeAfterDays`; each role and channel is checked to belong to the guild). `PATCH …/streamers/{twitchId}` with `channelOverridePinned: false` sends a self-added streamer back to role-based channel selection.
   - `GET …/audit?type=&before=`: this server's audit log, paged and newest first. Super-admin-only entries are left out for normal sessions.
   - `GET …/problems`: recorded failures (step 4), the live permission check results (step 5), and the bot-wide Twitch status. `DELETE …/problems/{id}` and `DELETE …/problems` dismiss entries.
   - Super admin only: `GET /dashboard/api/admin/guilds` (all servers with the summary fields above), `enabledTwitchTracking` accepted in `PATCH …/settings`, `POST /dashboard/api/admin/guilds/{guildId}/leave` (`{confirmName, reason, block}`), `GET /dashboard/api/admin/blocked`, `DELETE /dashboard/api/admin/blocked/{guildId}`, and `GET /dashboard/api/admin/audit?guild=&type=&before=` (paged, newest first). All return 403 for normal sessions.
