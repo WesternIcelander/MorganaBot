@@ -5,6 +5,7 @@ import io.siggi.morganabot.ServerSettings.SettingsException;
 import io.siggi.morganabot.ServerSettings.StreamerRef;
 import io.siggi.morganabot.audit.Actor;
 import io.siggi.morganabot.config.ServerInfo;
+import io.siggi.morganabot.health.Health;
 import io.siggi.morganabot.util.Util;
 import net.dv8tion.jda.api.entities.User;
 import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent;
@@ -39,7 +40,7 @@ public class TwitchCommandHandler {
         } catch (SettingsException e) {
             reply = e.getMessage();
         } catch (Exception e) {
-            e.printStackTrace();
+            Health.unexpected("Command /" + event.getName() + " failed", e);
             reply = "There was a problem executing that command, try again!";
         }
         event.reply(reply).setEphemeral(true).queue();

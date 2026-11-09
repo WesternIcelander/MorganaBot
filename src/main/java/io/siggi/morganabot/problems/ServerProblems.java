@@ -2,6 +2,7 @@ package io.siggi.morganabot.problems;
 
 import com.google.gson.Gson;
 import io.siggi.morganabot.config.ServerInfoStore;
+import io.siggi.morganabot.health.Health;
 
 import java.io.File;
 import java.io.IOException;
@@ -99,7 +100,7 @@ public class ServerProblems {
             });
         } catch (Exception e) {
             System.err.println("Could not write problem entry for guild " + guildId);
-            e.printStackTrace();
+            Health.saveFailed(getFile(guildId), e);
             return null;
         }
     }
@@ -190,5 +191,6 @@ public class ServerProblems {
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
+        Health.saved(file);
     }
 }

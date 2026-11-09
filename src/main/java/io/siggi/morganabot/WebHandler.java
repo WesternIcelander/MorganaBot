@@ -1,6 +1,7 @@
 package io.siggi.morganabot;
 
 import io.siggi.morganabot.config.Configuration;
+import io.siggi.morganabot.health.Health;
 import io.siggi.http.HTTPServer;
 import io.siggi.http.HTTPServerBuilder;
 
@@ -17,6 +18,7 @@ public class WebHandler {
     }
 
     private boolean started = false;
+    private volatile boolean stopped = false;
     private ServerSocket serverSocket;
     private Thread thread;
     private HTTPServer httpServer;
@@ -37,11 +39,15 @@ public class WebHandler {
                     httpServer.handle(accept);
                 }
             } catch (Exception e) {
+                if (!stopped) {
+                    Health.unexpected("Web server stopped accepting connections", e);
+                }
             }
-        })).start();
+        }, "Web server")).start();
     }
 
     public void stop() {
+        stopped = true;
         try {
             serverSocket.close();
         } catch (Exception ignored) {

@@ -3,6 +3,7 @@ package io.siggi.morganabot.audit;
 import com.google.gson.Gson;
 import com.google.gson.JsonParseException;
 import io.siggi.morganabot.config.ServerInfoStore;
+import io.siggi.morganabot.health.Health;
 
 import java.io.File;
 import java.io.IOException;
@@ -102,7 +103,7 @@ public class AuditLog {
             append(guildId, entry);
         } catch (Exception e) {
             System.err.println("Could not write audit entry for guild " + guildId + ": " + gson.toJson(entry));
-            e.printStackTrace();
+            Health.saveFailed(getFile(guildId), e);
         }
         if (actor != null && actor.source == Actor.Source.SUPER_ADMIN) {
             System.out.println("Super admin change in guild " + guildId + " by " + actor + ": " + describe(entry));
@@ -125,6 +126,7 @@ public class AuditLog {
                 }
                 line(file, line);
                 trim(file);
+                Health.saved(file);
                 return null;
             } catch (IOException e) {
                 throw new UncheckedIOException(e);

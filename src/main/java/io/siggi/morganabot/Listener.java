@@ -1,5 +1,6 @@
 package io.siggi.morganabot;
 
+import io.siggi.morganabot.health.Health;
 import net.dv8tion.jda.api.events.interaction.command.CommandAutoCompleteInteractionEvent;
 import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
@@ -57,7 +58,7 @@ public class Listener extends ListenerAdapter {
                 break;
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            Health.unexpected("Command /" + event.getName() + " failed", e);
             event.reply("There was a problem executing that command").setEphemeral(true).queue();
         }
     }

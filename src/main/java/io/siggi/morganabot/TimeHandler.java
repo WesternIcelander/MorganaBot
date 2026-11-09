@@ -1,6 +1,7 @@
 package io.siggi.morganabot;
 
 import io.siggi.morganabot.config.UserData;
+import io.siggi.morganabot.health.Health;
 import io.siggi.morganabot.util.Util;
 import net.dv8tion.jda.api.events.interaction.command.CommandAutoCompleteInteractionEvent;
 import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent;
@@ -34,7 +35,8 @@ public class TimeHandler {
                 timezoneSet.add(line);
                 timezoneMap.put(line.toLowerCase(Locale.ROOT), line);
             }
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            Health.unexpected("Could not load timezones.txt", e);
         }
     }
 
