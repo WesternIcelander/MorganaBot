@@ -16,13 +16,23 @@ Server settings:
 - Delete notifications on offline (`/setdeleteonoffline`)
 - Server-wide live message template (`/setlivemessage`), with the variable list and a preview
 - Notification cooldown (`streamNotificationCooldown`; no command for it today)
-- `enabledTwitchTracking` is **read-only**: it stays an owner-only switch set by editing the JSON. If it's off, the UI says so and the Twitch sections are disabled, the same as the commands.
+- `enabledTwitchTracking` is **super admin only** (see below). Normal sessions never see or send it. If it's off, they see the same "not enabled for this server, contact …" message the commands give, and the Twitch sections are disabled.
 
 Streamers (`/streamerlist`, `/addstreamer`, `/deletestreamer`):
 - List: Twitch name and link, linked Discord user, channel override, template override, live now, last stream
 - Add by Twitch name, with optional Discord user and channel override
 - Delete
 - Edit the channel override (`/setchanneloverride`), template override (`/setlivemessage discord-name:`), and linked Discord user (no command for that today)
+
+### Super admin
+
+A separate web UI for the bot owner that can view and change settings on **any** server the bot is in, e.g. when a server owner asks for help setting something up. It is also the only place `enabledTwitchTracking` can be turned on or off, apart from editing the JSON by hand.
+
+- **Who:** `config.json` gets `superAdmins: [<discord user id>, …]`. The hard-coded `<@260595748465278976>` in the "not enabled" messages is replaced with the first super admin from config.
+- **Login:** the same `/dashboard` command. It's also allowed in DMs with the bot. In a DM, only super admins get a link (everyone else is told to run it in their server). A super admin's link starts a super admin session from either place.
+- **Server list:** every server the bot is in, with name, ID, icon, member count, Twitch enabled on/off, number of streamers, and number of current problems. Searchable by name or ID, filterable by "Twitch enabled" and "has problems".
+- **Server view:** exactly the same settings, streamers and problems UI a server admin gets, plus the `enabledTwitchTracking` toggle. A banner says "Super admin view" so it isn't mistaken for a normal session.
+- **Safety:** super admin sessions expire after 8 hours instead of 24. The server checks the super admin flag on every request; hiding the toggle in the UI isn't the security. Every change made from a super admin session is written to the bot's stdout log with the user, server, setting, and old → new value.
 
 ### Design decisions (veto any of these before I start)
 
@@ -39,8 +49,8 @@ Streamers (`/streamerlist`, `/addstreamer`, `/deletestreamer`):
 - [ ] 2. **Move settings logic out of the command handler.** Create a `ServerSettings` service that does all the validation and changes for each setting, and calls `triggerUpdate` when needed. The command handlers then just parse options and pass them to it. While doing this, fix the `getStreamer` wrong-match bug and the `/addstreamer` NullPointerException listed below.
 - [ ] 3. **Record failed actions per server.** Today every Discord action is fired with `.queue()` and no failure handler, so failures vanish. Add a `ServerProblems` record for each guild, saved to `data/servers/<id>-problems.json` and kept to the newest 100 entries. Each entry has a time, the action, the target (channel, role, member or streamer), and a readable reason, e.g. "Missing permission Send Messages in #live", "Unknown channel (deleted?)", "Role @Live is above the bot's highest role". Add failure callbacks that write an entry to every action in `handleLiveNotification` (send, delete, add role, remove role), and map common JDA errors (`InsufficientPermissionException`, `HierarchyException`, `ErrorResponseException` with `MISSING_PERMISSIONS` / `UNKNOWN_CHANNEL` / `UNKNOWN_MESSAGE` / `UNKNOWN_MEMBER`) to friendly text. Also log the cases that are skipped without anything being attempted: the configured channel is missing or isn't a text channel, the live role was deleted, or no channel is set. Repeated identical failures are combined into one entry with a count and a last-seen time, so a streamer going live 20 times doesn't fill the list. Problems with Twitch itself (token refresh, subscription sync, failed `getChannelInformation`) affect every server, so they go into one bot-wide status record instead (the latest error and when, plus when the last success was). Entries can be dismissed: one at a time, or all at once.
 - [ ] 4. **Check permissions before anything fails.** Add a function that checks the current config against what the bot can actually do right now. For each live channel it uses (default and overrides): does the channel exist, is it a text channel, and does the bot have View Channel and Send Messages there (plus Mention Everyone if the template contains `@everyone`/`@here`)? For the live role: does it exist, does the bot have Manage Roles, and is the role below the bot's highest role? Is each linked Discord user still in the server? This doesn't store anything; it runs when the UI asks for it.
-- [ ] 5. **`/dashboard` command and login.** Register the command with admin-only default permissions and guild-only context. Add `LoginTokenStore` (one-time tokens) and `DashboardSessions` (sessions, the guilds each one can access, CSRF token, expiry). Add `GET /dashboard/login?token=` (use the token, create the session, redirect) and `POST /dashboard/api/logout`.
-- [ ] 6. **Web plumbing.** Add a request helper that sends JSON responses with consistent errors, finds the session, checks CSRF on writes, and checks that the session can access the guild. Set security headers (`Referrer-Policy: no-referrer`, a strict CSP, `X-Frame-Options: DENY`, `Cache-Control: no-store` on API responses). Serve static files from the classpath.
+- [ ] 5. **`/dashboard` command and login.** Register the command with admin-only default permissions, usable in servers and in DMs with the bot. In DMs, only super admins get a link. Add `superAdmins` to `Configuration` and `blank-config.json`. Add `LoginTokenStore` (one-time tokens) and `DashboardSessions` (sessions, the guilds each one can access, CSRF token, expiry). Add `GET /dashboard/login?token=` (use the token, create the session, redirect) and `POST /dashboard/api/logout`.
+- [ ] 6. **Web plumbing.** Add a request helper that sends JSON responses with consistent errors, finds the session, checks CSRF on writes, and checks that the session can access the guild (super admin sessions can access any guild the bot is in). Set security headers (`Referrer-Policy: no-referrer`, a strict CSP, `X-Frame-Options: DENY`, `Cache-Control: no-store` on API responses). Serve static files from the classpath.
 - [ ] 7. **JSON API** under `/dashboard/api/guilds/{guildId}/…`:
   - `GET /guilds`: the guilds this session can access (name, icon)
   - `GET …/settings`, `PATCH …/settings`
@@ -48,13 +58,16 @@ Streamers (`/streamerlist`, `/addstreamer`, `/deletestreamer`):
   - `GET …/members?q=`
   - `GET …/streamers` (adds Twitch display name and login, fetched in batches), `POST …/streamers`, `PATCH …/streamers/{twitchId}`, `DELETE …/streamers/{twitchId}`
   - `GET …/problems`: recorded failures (step 3), the live permission check results (step 4), and the bot-wide Twitch status. `DELETE …/problems/{id}` and `DELETE …/problems` dismiss entries.
+  - Super admin only: `GET /dashboard/api/admin/guilds` (all servers with the summary fields above), and `enabledTwitchTracking` accepted in `PATCH …/settings`. Both return 403 for normal sessions.
   - Every channel ID and role ID sent in is checked to belong to that guild.
 - [ ] 8. **Frontend:** a guild picker if the session has more than one guild, a settings form, and a streamer table with add, edit and delete. It shows server-side validation errors next to the field they belong to. It handles an expired session by showing "run /dashboard again". Problems:
   - A **Problems** panel at the top whenever there's anything to report. It shows current permission-check failures, recent recorded failures (newest first, with count and last seen), and a banner when Twitch is failing for the whole bot.
   - Warnings next to the setting or streamer row they relate to, e.g. a "can't post here" badge on the channel picker.
   - Saving a setting runs the permission check immediately, so a newly picked channel the bot can't post in gets flagged straight away.
-- [ ] 9. **Docs:** update the README with the dashboard, the `/dashboard` command and its permission, and the requirement that the reverse proxy sends `X-Forwarded-Proto`. Update CLAUDE.md with the new classes.
-- [ ] 10. **Test end to end with the dev bot:** run `/dashboard`, log in, change every setting, check that the matching command output agrees, and check that a second login link and an expired token are both rejected. Problems: remove the bot's Send Messages permission in the live channel, delete the live role, and move the live role above the bot's role. Check that each one shows up in the permission check and, after a live event, in the recorded failures.
+- [ ] 9. **Super admin UI:** the searchable server list, opening any server in the normal UI with the "Super admin view" banner, and the Twitch enable/disable toggle.
+- [ ] 10. **Make `enabledTwitchTracking` actually control the Twitch watcher.** Today the flag only blocks commands. `ensureSubscriptionToEvents` and `handleNotification` ignore it, so a disabled server with streamers still gets subscriptions and live posts. Skip disabled servers in both places, and call `triggerUpdate()` when the flag changes so subscriptions are added or removed straight away.
+- [ ] 11. **Docs:** update the README with the dashboard, the `/dashboard` command and its permission, the requirement that the reverse proxy sends `X-Forwarded-Proto`, and the `superAdmins` config key. Update CLAUDE.md with the new classes.
+- [ ] 12. **Test end to end with the dev bot:** run `/dashboard`, log in, change every setting, check that the matching command output agrees, and check that a second login link and an expired token are both rejected. Problems: remove the bot's Send Messages permission in the live channel, delete the live role, and move the live role above the bot's role. Check that each one shows up in the permission check and, after a live event, in the recorded failures. Super admin: log in from a DM and from a server, open a server the super admin isn't a member of, turn Twitch on and off and check that subscriptions follow. Check that a normal session gets 403 on the admin endpoints and on `enabledTwitchTracking`, and that a non-super-admin running `/dashboard` in a DM gets no link.
 
 ## Known bugs / candidates
 
