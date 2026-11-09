@@ -28,7 +28,11 @@ Streamers (`/streamerlist`, `/addstreamer`, `/deletestreamer`):
 
 Not a separate UI: it's the same dashboard, with extra powers when the session belongs to a super admin. It can view and change settings on **any** server the bot is in, e.g. when a server owner asks for help setting something up. It is also the only place `enabledTwitchTracking` can be turned on or off, apart from editing the JSON by hand.
 
-- **Who:** `config.json` gets `superAdmins: [<discord user id>, …]`. The hard-coded `<@260595748465278976>` in the "not enabled" messages is replaced with the first super admin from config.
+- **Who:** set in `config.json` as a list of Discord user snowflakes:
+  ```json
+  "superAdmins": ["260595748465278976"]
+  ```
+  IDs are written as strings, because snowflakes are too big for JSON numbers to hold exactly in many tools (JavaScript included). Gson reads them into a `List<Long>`, and plain numbers are accepted too. A missing or empty list means there are no super admins. The list is only read at startup, so changing it needs a restart. The hard-coded `<@260595748465278976>` in the "not enabled" messages is replaced with the first super admin from config. If the list is empty, the message leaves out the contact part.
 - **Login:** the same `/dashboard` command. It's also allowed in DMs with the bot. In a DM, only super admins get a link (everyone else is told to run it in their server). A super admin's link starts a super admin session from either place.
 - **Server switcher:** a sidebar on the left of the normal UI, shown only for super admin sessions. It lists every server the bot is in, with name, icon, ID, member count, Twitch on/off, number of streamers, and number of current problems. It's searchable by name or ID, and filterable by "Twitch enabled" and "has problems". Picking a server loads it into the same settings view.
 - **Server view:** the same page a server admin sees, plus the `enabledTwitchTracking` toggle and a small "Super admin" badge in the header so it's clear which mode you're in.
