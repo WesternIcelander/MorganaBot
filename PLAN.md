@@ -250,8 +250,8 @@ Every file under `data/` must keep loading after a deploy, with nothing lost and
     - exists
     - the bot has Manage Roles
     - the role is below the bot's highest role
-  - **Self-service roles:** each still exists, and each override channel passes the channel checks below (step 7's rules).
-  - **Message permission rules:** the roles they reference still exist (step 8).
+  - *(Added by step 7: each self-service role still exists, and each override channel passes the channel checks below.)*
+  - *(Added by step 8: the roles that message permission rules reference still exist.)*
   - **Twitch on/off:** if Twitch tracking is off, say so first, since nothing will post.
 
   **Per streamer:**
@@ -259,14 +259,14 @@ Every file under `data/` must keep loading after a deploy, with nothing lost and
   - **Channel checks:** the channel exists, and is a text or announcement channel. Announcement channels are currently skipped silently; see Known bugs. The bot's **effective permissions in that channel**, including channel overrides, must include:
     - View Channel
     - Send Messages
-  - **Mentions in their template:** the template is their own, or the server-wide one if they don't have one. Find its mentions (the same parser as step 8), then check:
+  - **Mentions in their template:** the template is their own, or the server-wide one if they don't have one. Find its mentions with a shared `Mentions.parse(template)` written in this step (step 8 reuses it), then check:
     - **`@everyone`/`@here`:** the bot needs Mention Everyone in that channel. Otherwise it's posted as text but doesn't ping.
     - **Each `<@&role>`:** the role must exist, and must either be marked "Allow anyone to @mention this role" or the bot must have Mention Everyone in that channel (which covers all roles). Otherwise it doesn't ping.
     - **Each `<@user>`:** the user is still in the server.
   - **Live role:** if a live role is set, the streamer's linked Discord user must be in the server, and the role checks above apply. If they have no linked user, the result says "no live role will be given".
   - **Deleting old posts:** if delete-on-offline is on, the bot needs View Channel and Read Message History. It can delete its own messages without Manage Messages.
   - **Template length:** the filled-in message must fit in 2000 characters, using a long example stream title.
-  - **Status notes:** paused (self-service role lost, with the date), or the Twitch subscription disabled by Twitch (from step 5's EventSub statuses).
+  - **Status notes:** the Twitch subscription disabled by Twitch (from step 5's EventSub statuses). *(Step 7 adds: paused because the self-service role was lost, with the date.)*
 
   **Result per check:** OK, warning (it posts, but something is degraded, e.g. a mention won't ping), or error (nothing will post). Each has a plain-English reason and a fix hint, e.g. "Give MorganaBot *Send Messages* in #live, or pick another channel". Results are grouped by streamer, with server-wide issues first.
 - [ ] 7. **Self-service streamer adding (backend and commands).**
@@ -286,7 +286,7 @@ Every file under `data/` must keep loading after a deploy, with nothing lost and
     - a `role-based: True` option on `/setchanneloverride` to unpin a self-added streamer
     
     Every other setting can be changed both by command and in the dashboard, so these can too.
-  - **Diagnose:** step 6 already includes the self-service checks. If step 7 lands after step 6, add them there.
+  - **Diagnose:** add the self-service checks to step 6's Diagnose: roles exist, override channels pass the channel checks, the paused note, and which role the channel came from.
 - [ ] 8. **Access levels and message permissions (backend).**
   - **Data:** add `adminRoles: [roleId]` and `messageCustomizationRules: [{roleId, allowEveryone, allowedMentionRoles}]` to `ServerInfo`, and `templateSetBy` to `Streamer`. All of them are additive.
   - **`Access.of(member)`** returns `ADMIN`, `STREAMER` or `NONE`, as described in Who can use the dashboard, plus helpers:
@@ -302,7 +302,7 @@ Every file under `data/` must keep loading after a deploy, with nothing lost and
   - **Commands:**
     - `/addadminrole` and `/removeadminrole` (Administrator-only by default, and checked by the bot)
     - `/addmessagerole role: allow-everyone: mention-roles:` and `/removemessagerole role:` (admin-only by default)
-  - **Diagnose:** the message-rule role checks in step 6 use this step's data. Mention checks for templates use the shared mention parser written here, so step 6 needs the parser first. Write the parser in step 6 and reuse it here.
+  - **Diagnose:** add a check to step 6's Diagnose that the roles referenced by message permission rules still exist. Save-time mention validation reuses step 6's `Mentions.parse`.
 - [ ] 9. **`/dashboard` command and login.** Register the command (default enabled, usable in servers and DMs). Reply with a link only if the user has access to at least one server, or is a super admin. Add `superAdmins` to `Configuration` and `blank-config.json`. Add `LoginTokenStore` (one-time tokens tied to a user) and `DashboardSessions` (sessions holding the user ID, super admin flag, CSRF token and expiry; access isn't stored, it's checked per request). Add the stdout recovery login link from step 5 (a super admin token that doesn't need Discord). Add `GET /dashboard/login?token=` (use the token, create the session, redirect) and `POST /dashboard/api/logout`. Thread safety: each request runs on its own thread, so login tokens are used up atomically (`ConcurrentHashMap.remove`, so two tabs can't both redeem one link), and the session store is a concurrent map.
 - [ ] 10. **Web plumbing.** Add a request helper that sends JSON responses with consistent errors, finds the session, checks CSRF on writes, and checks access **per request** with `Access.of(member)` (step 8): admin endpoints need `ADMIN`, the own-entry endpoints need at least `STREAMER`, and super admin sessions can access any guild the bot is in. If Discord is unavailable, super admin sessions still work (the flag is in the session), and guild endpoints return a clear "Discord unavailable" error. Set security headers (`Referrer-Policy: no-referrer`, a strict CSP, `X-Frame-Options: DENY`, `Cache-Control: no-store` on API responses). Serve static files from the classpath.
 - [ ] 11. **JSON API** under `/dashboard/api/guilds/{guildId}/…`:
