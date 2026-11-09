@@ -1,0 +1,35 @@
+{
+  "enabledTwitchTracking": true,
+  "channelToPostLiveNotifications": 1532050821162860574,
+  "deleteNotificationsOnOffline": true,
+  "roleForLiveUsers": 1163991005738061975,
+  "streamers": [
+    {
+      "channelToPostLiveNotifications": 0,
+      "lastLiveNotificationId": 1300000000000000001,
+      "discordId": 200000000000000001,
+      "twitchId": "11111111",
+      "startedStreaming": 1730000000000,
+      "stoppedStreaming": 1730003600000
+    },
+    {
+      "channelToPostLiveNotifications": 1400000000000000002,
+      "lastLiveNotificationId": 0,
+      "discordId": 200000000000000002,
+      "twitchId": "22222222",
+      "liveNotificationTemplate": "**${streamer_name}** is live: ${title} ${twitch_link} <@&1163991005738061975>",
+      "startedStreaming": 1731000000000,
+      "stoppedStreaming": 0
+    },
+    {
+      "channelToPostLiveNotifications": 0,
+      "lastLiveNotificationId": 0,
+      "discordId": 0,
+      "twitchId": "33333333",
+      "startedStreaming": 0,
+      "stoppedStreaming": 0
+    }
+  ],
+  "liveNotificationTemplate": "${streamer_name} has gone live on Twitch! Watch at: ${twitch_link}",
+  "streamNotificationCooldown": 900000
+}
