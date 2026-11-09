@@ -62,3 +62,5 @@ Streamers (`/streamerlist`, `/addstreamer`, `/deletestreamer`):
 ## Notes
 
 - JDA bumped 6.5.0 → 6.7.0 — `c1bf04e`
+- SiggiHTTP bumped 1.10 → 1.11-SNAPSHOT — `b8e9cd8`. This version only adds API (error pages, header timeout, dev mode, `getNextHopAddress`). Its built-in session cookie still has no `SameSite` option, so the dashboard keeps its own cookie. **The snapshot is only in the local `~/.m2`, not on repo.siggi.io, so builds from a fresh checkout of `main` fail until it's published.**
+- If SiggiHTTP bugs turn up, report them to the `SiggiHTTP` Claude session with SendMessage.
