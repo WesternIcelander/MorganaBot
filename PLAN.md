@@ -56,7 +56,8 @@ Admins choose which non-admin streamers can write their own live message, and wh
   - **already in their previously saved message.**
   
   So they can always edit around a mention they were given, e.g. one an admin put in, or one from a rule they've since lost. They can't *add* one they aren't allowed. If they remove a kept mention and save, it's gone: adding it back later needs a rule that allows it. Mentions are compared by identity (`@everyone`, `@here` and each role ID count separately), not by how many times they appear. The error names exactly which mentions aren't allowed.
-  - "Previously saved message" means their own per-streamer template. If they don't have one yet, it's the server-wide template that's currently used for their posts, since the editor starts from that text. *(Assumption, for the user to confirm.)* Templates have a maximum length so the filled-in message fits Discord's 2000-character limit.
+  - "Previously saved message" means their own per-streamer template. If they don't have one yet, it's the server-wide template that's currently used for their posts, since the editor starts from that text. *(Assumption, for the user to confirm.)*
+- **Length limit:** templates have a maximum length so the filled-in message fits Discord's 2000-character limit.
 - **Mention permissions are only checked when saving, not when posting** (user's decision). Whatever passed the save check pings as written: every mention in the saved template text pings, whoever wrote it, even if the member later loses the rule. Each streamer template stores `templateSetBy` (who last saved it), only so the dashboard and audit can show it.
 - **Template text is never altered.** A mention that isn't allowed causes the save to be **rejected**, never silently defused or stripped (user's rule).
 - **Twitch data can never ping.** Two layers:
@@ -85,7 +86,6 @@ Streamers can add themselves with `/settwitchchannel twitch-name:<name>`, as lon
 - **`/removetwitchchannel`** lets a member remove their own entry, even if they no longer have the role.
 - **Changes are audited,** with source "self-service".
 - **Permission check (step 5) covers the rules too:** every self-service role must still exist, and every override channel must exist with the bot able to post there.
-
 - **Live role tracking (self-added streamers only).** The bot has all privileged intents, so it follows role changes as they happen. Admin-added streamers are never affected.
   - **Losing eligibility pauses posts.** That means losing the last self-service role, leaving the server, or an admin removing that role from the self-service list. The bot records `selfServiceLostAt` and stops posting for them (no live post, no live role). It's shown as "Paused: no self-service role since <date>" in the streamer table, with an audit entry from "system".
   - **Getting a self-service role back resumes posts,** clearing `selfServiceLostAt`, also with an audit entry.
@@ -144,14 +144,14 @@ Every file under `data/` must keep loading after a deploy, with nothing lost and
 
 - **Current plan doesn't change any existing format.**
   - Step 1 only changes how files are cached and locked.
-  - Step 4 adds new `data/servers/<id>-problems.json` files. A missing file means no problems.
   - Step 3 adds new `data/servers/<id>-audit.jsonl` files. A missing file means no entries.
-  - Step 7 adds optional `adminRoles` and `messageCustomizationRules` to server files, and `templateSetBy` to streamers. Missing means no extra admin roles and no non-admin customization, so nothing changes on production.
+  - Step 4 adds new `data/servers/<id>-problems.json` files. A missing file means no problems.
   - Step 6 adds optional `selfServiceRoles` and `selfServiceRemoveAfterDays` to server files, and optional `selfService`, `addedBy`, `selfServiceLostAt` and `channelOverridePinned` to streamers. Missing values mean: the feature is off, the expiry is 7 days, the streamer was added by an admin, and they're not paused or pinned.
+  - Step 7 adds optional `adminRoles` and `messageCustomizationRules` to server files, and `templateSetBy` to streamers. Missing means no extra admin roles and no non-admin customization, so nothing changes on production.
   - Step 8 adds an optional `superAdmins` key to `config.json`. If it's missing, there are no super admins.
   - Sessions and login tokens live in memory only.
   - `ServerInfo`, `Streamer`, `UserData`, `AuthCache` and the existing `config.json` keys stay exactly as they are.
-- **Per-server data stays in per-server files** (`data/servers/<guildId>.json`, `data/servers/<guildId>-problems.json`). Nothing per-server is ever bundled into a shared file. Only bot-wide state (`config.json`, `auth-cache.json`, the Twitch status) is global.
+- **Per-server data stays in per-server files** (`data/servers/<guildId>.json`, `-problems.json`, `-audit.jsonl`). Nothing per-server is ever bundled into a shared file. Only bot-wide state (`config.json`, `auth-cache.json`, the Twitch status) is global.
 - **Additive changes are preferred:** new fields with a safe default when missing. Gson leaves a missing field at its initializer, because these classes have no-arg constructors. Gson also ignores unknown fields, so a rollback to the old jar keeps working with new files.
 - **If a step ever needs to rename, move, restructure or change the meaning of stored data:**
   - Add `dataVersion` to that file type, where a missing value means version 0, today's format.
@@ -159,7 +159,7 @@ Every file under `data/` must keep loading after a deploy, with nothing lost and
   - Before the first migrated save, write a backup copy (`<name>.json.v<old>.bak`).
   - Add a migration test using a copy of today's format.
   - Write up the change here before doing it.
-- **Hand-editing must keep working until the UI replaces it.** Today `enabledTwitchTracking` is turned on by editing the server JSON on production while the bot runs. After step 12 that's no longer needed, but the reload stays as a cheap safety net. That works now because every access reads the file fresh. Step 1's cache would silently ignore those edits, and then overwrite them on the next save. So the store must notice when the file's modified time changes on disk and reload it before using or saving it.
+- **Hand-editing must keep working until the UI replaces it.** Today `enabledTwitchTracking` is turned on by editing the server JSON on production while the bot runs. That works because every access reads the file fresh. Step 1's cache would silently ignore those edits, and then overwrite them on the next save. So the store must notice when the file's modified time changes on disk and reload it before using or saving it. After step 12 hand-editing isn't needed any more, but the reload stays as a cheap safety net.
 - **Deploy note:** add `superAdmins` to the production `config.json` before or with the deploy that includes step 8. Otherwise there's no super admin, and the "not enabled, contact …" message loses its contact.
 - **Before deploying, test against real data:** run the new build on a copy of the production `data/` directory, not just the dev data. Check that every server, streamer, template and user timezone loads and shows up unchanged, and that saving doesn't drop any fields.
 
@@ -232,7 +232,7 @@ Every file under `data/` must keep loading after a deploy, with nothing lost and
   - A **Problems** panel at the top whenever there's anything to report. It shows current permission-check failures, recent recorded failures (newest first, with count and last seen), and a banner when Twitch is failing for the whole bot.
   - Warnings next to the setting or streamer row they relate to, e.g. a "can't post here" badge on the channel picker.
   - Saving a setting runs the permission check immediately, so a newly picked channel the bot can't post in gets flagged straight away.
-- [ ] 12. **Super admin additions to the frontend:** when `GET /dashboard/api/me` says the session is a super admin, show the server switcher sidebar (from `GET /dashboard/api/admin/guilds`), the "Super admin" badge, the Twitch on/off toggle, the "Remove bot from server" button with its type-the-name confirmation, and the Blocked servers list. A normal session that has run `/dashboard` in more than one server gets a simple dropdown to switch between those servers instead.
+- [ ] 12. **Super admin additions to the frontend:** when `GET /dashboard/api/me` says the session is a super admin, show the server switcher sidebar (from `GET /dashboard/api/admin/guilds`), the "Super admin" badge, the Twitch on/off toggle, the "Remove bot from server" button with its type-the-name confirmation, and the Blocked servers list. Normal sessions with access to more than one server get a simple dropdown to switch between them instead.
 - [ ] 13. **Make `enabledTwitchTracking` actually control the Twitch watcher.** Today the flag only blocks commands. `ensureSubscriptionToEvents` and `handleNotification` ignore it, so a disabled server with streamers still gets subscriptions and live posts. Skip disabled servers in both places, and call `triggerUpdate()` when the flag changes so subscriptions are added or removed straight away.
 - [ ] 14. **Remove and block servers (backend).** Add the optional block fields to `ServerInfo`. `ServerSettings.leaveGuild(guildId, reason, block, byUser)` saves the block first, then calls `guild.leave()`, then `triggerUpdate()`, and writes the action to the stdout log. Add a `GuildJoinEvent` listener and a startup sweep that leave blocked servers. Finding all blocked servers means scanning `data/servers/*.json` for `blocked: true`; that's cheap at this scale, and it keeps the block in the per-server file.
 - [ ] 15. **Super admin audit entries and pages.** The core log and the per-server tab already exist (steps 3 and 11). This step adds:
@@ -273,7 +273,6 @@ Every file under `data/` must keep loading after a deploy, with nothing lost and
   - A streamer with no template of their own, whose server-wide template contains `@everyone`, can save an edited copy keeping it.
   - An existing production template with a role mention keeps pinging after deploy.
   - A stream title containing `@everyone`, `@here` or `<@&role>` doesn't ping, even when the template itself contains `@everyone`. The title still reads normally.
-  - Existing production templates still behave as before.
   
   Audit: change settings through both commands and the dashboard, and check that each one appears in the server's Audit tab with the right person, source and old → new value. Check that a normal admin doesn't see super-admin-only entries. Remove the dev bot from a test server with block on: check that it leaves, its subscriptions are removed, re-inviting makes it leave again straight away and an attempted-join entry appears in the audit log (with a count after a few retries), and unblocking lets the re-invite stay with the old settings intact. Check that a normal session gets 403 on the admin endpoints and on `enabledTwitchTracking`, and that a user with no access to any server gets no link from `/dashboard` in a DM.
 
@@ -286,7 +285,7 @@ Race conditions (SiggiHTTP handles each request on its own thread, and JDA comma
 - [ ] `triggerUpdate()` NullPointerException after `stop()` sets `thread` to null.
 
 Security:
-- [ ] Twitch stream titles (and other Twitch values) are inserted into the live message with no mention filtering, so a title containing `@everyone`/`@here` or `<@&role>` pings if the bot has the permission. Fixed by step 7's `allowed_mentions`.
+- [ ] Twitch stream titles (and other Twitch values) are inserted into the live message with no mention filtering, so a title containing `@everyone`/`@here` or `<@&role>` pings if the bot has the permission. Fixed by step 7 (defusing Twitch values plus `allowed_mentions`).
 
 Other:
 
