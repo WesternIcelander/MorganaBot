@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "../../../target/web-test",
+    "lib": ["ES2022", "DOM"],
+    "types": []
+  },
+  "include": ["ts/**/*.ts", "test/**/*.ts"]
+}

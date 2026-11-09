@@ -15,6 +15,8 @@
         <maven.build.timestamp.format>yyyy-MM-dd'T'HH:mm:ss'Z'</maven.build.timestamp.format>
         <!-- maven.build.timestamp can't be used directly in filtered resources -->
         <morganabot.buildTime>${maven.build.timestamp}</morganabot.buildTime>
+        <!-- The dashboard frontend (src/main/web) is built with this Node, downloaded into target/node -->
+        <frontend.nodeVersion>v24.22.2</frontend.nodeVersion>
     </properties>
 
     <repositories>
@@ -78,8 +80,71 @@
                     <exclude>build-info.properties</exclude>
                 </excludes>
             </resource>
+            <!-- Dashboard page and styles; the TypeScript is compiled into web/js by the frontend plugin below -->
+            <resource>
+                <directory>src/main/web</directory>
+                <targetPath>web</targetPath>
+                <filtering>false</filtering>
+                <includes>
+                    <include>index.html</include>
+                    <include>*.css</include>
+                </includes>
+            </resource>
         </resources>
         <plugins>
+            <plugin>
+                <!-- Builds the dashboard frontend: pinned Node in target/node, npm ci, tsc into target/classes/web/js,
+                     and the frontend's unit tests (node:test) in the test phase -->
+                <groupId>com.github.eirslett</groupId>
+                <artifactId>frontend-maven-plugin</artifactId>
+                <version>2.0.2</version>
+                <configuration>
+                    <workingDirectory>src/main/web</workingDirectory>
+                    <installDirectory>target</installDirectory>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>install-node</id>
+                        <phase>generate-resources</phase>
+                        <goals>
+                            <goal>install-node-and-npm</goal>
+                        </goals>
+                        <configuration>
+                            <nodeVersion>${frontend.nodeVersion}</nodeVersion>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>npm-ci</id>
+                        <phase>generate-resources</phase>
+                        <goals>
+                            <goal>npm</goal>
+                        </goals>
+                        <configuration>
+                            <arguments>ci --no-audit --no-fund</arguments>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>npm-build</id>
+                        <phase>compile</phase>
+                        <goals>
+                            <goal>npm</goal>
+                        </goals>
+                        <configuration>
+                            <arguments>run build</arguments>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>npm-test</id>
+                        <phase>test</phase>
+                        <goals>
+                            <goal>npm</goal>
+                        </goals>
+                        <configuration>
+                            <arguments>test</arguments>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>

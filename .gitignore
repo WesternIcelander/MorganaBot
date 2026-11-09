@@ -3,3 +3,5 @@
 /dependency-reduced-pom.xml
 /data
 /.idea
+node_modules/
+/target/node/

@@ -1,0 +1,14 @@
+{
+  "name": "morganabot-dashboard",
+  "private": true,
+  "version": "1.0.0",
+  "description": "MorganaBot's web dashboard frontend. Built by Maven (frontend-maven-plugin); see pom.xml.",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "tsc -p tsconfig.test.json && node --test \"../../../target/web-test/test/*.test.js\""
+  },
+  "devDependencies": {
+    "typescript": "6.0.3"
+  }
+}
