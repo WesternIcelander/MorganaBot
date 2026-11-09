@@ -47,11 +47,13 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.LinkedList;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.TimeZone;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
@@ -405,26 +407,7 @@ public class TwitchStreamerWatcher {
             ServerInfo serverInfo;
             try {
                 serverInfo = store.modify(guild.getIdLong(), info -> {
-                    for (ServerInfo.Streamer streamer : info.streamers) {
-                        if (skip(streamer, streamerId, goingOnline)) continue;
-                        if (streamerId.equals(streamer.twitchId)) {
-                            boolean postMessage = true;
-                            if (goingOnline) {
-                                if (streamer.startedStreaming == 0L) {
-                                    if (now - streamer.stoppedStreaming < info.streamNotificationCooldown) {
-                                        postMessage = false;
-                                    }
-                                }
-                                streamer.startedStreaming = now;
-                            } else {
-                                if (streamer.startedStreaming != 0L) {
-                                    streamer.startedStreaming = 0L;
-                                    streamer.stoppedStreaming = now;
-                                }
-                            }
-                            postMessages.add(postMessage);
-                        }
-                    }
+                    postMessages.addAll(recordNotification(info, streamerId, goingOnline, now));
                     return postMessages.isEmpty() ? null : store.copy(info);
                 });
             } catch (Exception e) {
@@ -442,6 +425,38 @@ public class TwitchStreamerWatcher {
                 }
             }
         }
+    }
+
+    /**
+     * Updates the streaming state of the server's entries for this streamer and decides, per entry (in order, paused
+     * entries left out, see {@link #skip}), whether to post a message (false while the notification cooldown runs).
+     * Returns an empty list when the server has Twitch off ({@code enabledTwitchTracking}): nothing is posted or
+     * changed there.
+     */
+    static List<Boolean> recordNotification(ServerInfo info, String streamerId, boolean goingOnline, long now) {
+        List<Boolean> postMessages = new ArrayList<>();
+        if (!info.enabledTwitchTracking) return postMessages;
+        for (ServerInfo.Streamer streamer : info.streamers) {
+            if (skip(streamer, streamerId, goingOnline)) continue;
+            if (streamerId.equals(streamer.twitchId)) {
+                boolean postMessage = true;
+                if (goingOnline) {
+                    if (streamer.startedStreaming == 0L) {
+                        if (now - streamer.stoppedStreaming < info.streamNotificationCooldown) {
+                            postMessage = false;
+                        }
+                    }
+                    streamer.startedStreaming = now;
+                } else {
+                    if (streamer.startedStreaming != 0L) {
+                        streamer.startedStreaming = 0L;
+                        streamer.stoppedStreaming = now;
+                    }
+                }
+                postMessages.add(postMessage);
+            }
+        }
+        return postMessages;
     }
 
     /**
@@ -731,6 +746,19 @@ public class TwitchStreamerWatcher {
         if (t != null) t.interrupt();
     }
 
+    /**
+     * The Twitch IDs this server needs EventSub subscriptions for: none when Twitch is off for the server
+     * ({@code enabledTwitchTracking}), otherwise every streamer entry.
+     */
+    static Set<String> trackedStreamerIds(ServerInfo serverInfo) {
+        Set<String> ids = new LinkedHashSet<>();
+        if (!serverInfo.enabledTwitchTracking) return ids;
+        for (ServerInfo.Streamer streamer : serverInfo.streamers) {
+            if (streamer.twitchId != null) ids.add(streamer.twitchId);
+        }
+        return ids;
+    }
+
     private void ensureSubscriptionToEvents() throws IOException {
         JDA jda = bot.getJDA();
         if (jda == null) throw new IOException("Discord unavailable");
@@ -746,11 +774,8 @@ public class TwitchStreamerWatcher {
                         + guild.getIdLong() + ": " + Health.describe(e), e);
                 continue;
             }
-            for (ServerInfo.Streamer streamer : serverInfo.streamers) {
-                StreamerInfo streamerInfo = streamerInfos.get(streamer.twitchId);
-                if (streamerInfo == null) {
-                    streamerInfos.put(streamer.twitchId, streamerInfo = new StreamerInfo());
-                }
+            for (String twitchId : trackedStreamerIds(serverInfo)) {
+                streamerInfos.computeIfAbsent(twitchId, k -> new StreamerInfo());
             }
         }
         List<String> subscriptionsToDelete = new LinkedList<>();

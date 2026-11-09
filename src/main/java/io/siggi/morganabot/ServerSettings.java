@@ -372,12 +372,15 @@ public class ServerSettings {
      * @return whether the value changed
      */
     public boolean setTwitchTracking(Actor actor, long guildId, boolean enabled) throws SettingsException {
-        return modifyAny(actor, guildId, AuditEntry.TWITCH_TRACKING, false, (serverInfo, audit) -> {
+        boolean changed = modifyAny(actor, guildId, AuditEntry.TWITCH_TRACKING, false, (serverInfo, audit) -> {
             boolean old = serverInfo.enabledTwitchTracking;
             audit.change("enabled", Value.bool(old), Value.bool(enabled));
             serverInfo.enabledTwitchTracking = enabled;
             return old != enabled;
         });
+        // The watcher only subscribes for servers with Twitch on, so add or remove subscriptions straight away.
+        if (changed) twitch.triggerUpdate();
+        return changed;
     }
 
     /**

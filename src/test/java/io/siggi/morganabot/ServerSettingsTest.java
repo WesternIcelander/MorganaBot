@@ -146,6 +146,18 @@ class ServerSettingsTest {
         assertTrue(twitch.lookups.isEmpty(), "no Twitch lookups for a disabled server");
     }
 
+    @Test
+    void changingTwitchTrackingTriggersUpdate() throws Exception {
+        assertFalse(settings.setTwitchTracking(ACTOR, GUILD, true));
+        assertEquals(0, twitch.updates, "no change, no resync");
+        assertTrue(settings.setTwitchTracking(ACTOR, GUILD, false));
+        assertEquals(1, twitch.updates);
+        assertFalse(store.get(GUILD).enabledTwitchTracking);
+        assertTrue(settings.setTwitchTracking(ACTOR, GUILD, true));
+        assertEquals(2, twitch.updates);
+        assertTrue(store.get(GUILD).enabledTwitchTracking);
+    }
+
     // --- addStreamer ---
 
     @Test
