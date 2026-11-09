@@ -85,7 +85,7 @@ Streamers can add themselves with `/settwitchchannel twitch-name:<name>`, as lon
   - The reply says which channel their live posts will go to.
 - **`/removetwitchchannel`** lets a member remove their own entry, even if they no longer have the role.
 - **Changes are audited,** with source "self-service".
-- **Permission check (step 6) covers the rules too:** every self-service role must still exist, and every override channel must exist with the bot able to post there.
+- **Diagnose (step 6) covers the rules too:** every self-service role must still exist, and every override channel must exist with the bot able to post there.
 - **Live role tracking (self-added streamers only).** The bot has all privileged intents, so it follows role changes as they happen. Admin-added streamers are never affected.
   - **Losing eligibility pauses posts.** That means losing the last self-service role, leaving the server, or an admin removing that role from the self-service list. The bot records `selfServiceLostAt` and stops posting for them (no live post, no live role). It's shown as "Paused: no self-service role since <date>" in the streamer table, with an audit entry from "system".
   - **Getting a self-service role back resumes posts,** clearing `selfServiceLostAt`, also with an audit entry.
@@ -239,7 +239,36 @@ Every file under `data/` must keep loading after a deploy, with nothing lost and
     - The Twitch watcher's guild loops wait until Discord is ready.
   - **Alerting:** DM super admins when a component turns red or recovers, rate-limited, with stdout as the fallback.
   - **Recovery login:** print a single-use super admin login link to stdout (15 minutes) when Discord fails, and hourly while it stays down. This needs the login token store from step 9, so the stdout link is wired up in that step.
-- [ ] 6. **Check permissions before anything fails.** Add a function that checks the current config against what the bot can actually do right now. For each live channel it uses (default and overrides): does the channel exist, is it a text channel, and does the bot have View Channel and Send Messages there (plus Mention Everyone if the template contains `@everyone`/`@here`)? For the live role: does it exist, does the bot have Manage Roles, and is the role below the bot's highest role? Is each linked Discord user still in the server? This doesn't store anything; it runs when the UI asks for it.
+- [ ] 6. **Diagnose: check every streamer's setup without waiting for a stream.** Add `Diagnose.run(guild)`, which works out what *would* happen on each streamer's next go-live and reports anything that would fail. It doesn't post or change anything, and doesn't store results. It runs:
+  - on demand from the **Diagnose** button
+  - automatically when the dashboard loads
+  - after every save, so a newly picked channel the bot can't post in gets flagged straight away
+  
+  **Server-wide checks:**
+  - **Default live channel:** set, exists, and is a type the bot can post to.
+  - **Live role:**
+    - exists
+    - the bot has Manage Roles
+    - the role is below the bot's highest role
+  - **Self-service roles:** each still exists, and each override channel passes the channel checks below (step 7's rules).
+  - **Message permission rules:** the roles they reference still exist (step 8).
+  - **Twitch on/off:** if Twitch tracking is off, say so first, since nothing will post.
+
+  **Per streamer:**
+  - **Which channel they'd post in:** their override, or the server default if it's empty. The result says which one it is, e.g. "#live (server default)" or "#vip-live (from role @VIP)".
+  - **Channel checks:** the channel exists, and is a text or announcement channel. Announcement channels are currently skipped silently; see Known bugs. The bot's **effective permissions in that channel**, including channel overrides, must include:
+    - View Channel
+    - Send Messages
+  - **Mentions in their template:** the template is their own, or the server-wide one if they don't have one. Find its mentions (the same parser as step 8), then check:
+    - **`@everyone`/`@here`:** the bot needs Mention Everyone in that channel. Otherwise it's posted as text but doesn't ping.
+    - **Each `<@&role>`:** the role must exist, and must either be marked "Allow anyone to @mention this role" or the bot must have Mention Everyone in that channel (which covers all roles). Otherwise it doesn't ping.
+    - **Each `<@user>`:** the user is still in the server.
+  - **Live role:** if a live role is set, the streamer's linked Discord user must be in the server, and the role checks above apply. If they have no linked user, the result says "no live role will be given".
+  - **Deleting old posts:** if delete-on-offline is on, the bot needs View Channel and Read Message History. It can delete its own messages without Manage Messages.
+  - **Template length:** the filled-in message must fit in 2000 characters, using a long example stream title.
+  - **Status notes:** paused (self-service role lost, with the date), or the Twitch subscription disabled by Twitch (from step 5's EventSub statuses).
+
+  **Result per check:** OK, warning (it posts, but something is degraded, e.g. a mention won't ping), or error (nothing will post). Each has a plain-English reason and a fix hint, e.g. "Give MorganaBot *Send Messages* in #live, or pick another channel". Results are grouped by streamer, with server-wide issues first.
 - [ ] 7. **Self-service streamer adding (backend and commands).**
   - **Data:** add to `ServerInfo`: `selfServiceRoles: List<{roleId, channelId}>` (missing = empty, which turns the feature off) and `selfServiceRemoveAfterDays` (default 7, 0 = never). Add to `Streamer`: `selfService`, `addedBy`, `selfServiceLostAt` and `channelOverridePinned`. All of them are additive.
   - **Intents:** enable `GUILD_MEMBERS` in `JDABuilder` with `MemberCachePolicy.ALL` and `ChunkingFilter.ALL`. That's fine for a private bot in fewer than 100 servers. JDA only fires role-change events for cached members.
@@ -257,7 +286,7 @@ Every file under `data/` must keep loading after a deploy, with nothing lost and
     - a `role-based: True` option on `/setchanneloverride` to unpin a self-added streamer
     
     Every other setting can be changed both by command and in the dashboard, so these can too.
-  - **Permission check:** add the self-service rules to step 6's check.
+  - **Diagnose:** step 6 already includes the self-service checks. If step 7 lands after step 6, add them there.
 - [ ] 8. **Access levels and message permissions (backend).**
   - **Data:** add `adminRoles: [roleId]` and `messageCustomizationRules: [{roleId, allowEveryone, allowedMentionRoles}]` to `ServerInfo`, and `templateSetBy` to `Streamer`. All of them are additive.
   - **`Access.of(member)`** returns `ADMIN`, `STREAMER` or `NONE`, as described in Who can use the dashboard, plus helpers:
@@ -273,7 +302,7 @@ Every file under `data/` must keep loading after a deploy, with nothing lost and
   - **Commands:**
     - `/addadminrole` and `/removeadminrole` (Administrator-only by default, and checked by the bot)
     - `/addmessagerole role: allow-everyone: mention-roles:` and `/removemessagerole role:` (admin-only by default)
-  - **Permission check:** if any template or rule allows `@everyone`, the bot needs Mention Everyone; allowed roles must still exist.
+  - **Diagnose:** the message-rule role checks in step 6 use this step's data. Mention checks for templates use the shared mention parser written here, so step 6 needs the parser first. Write the parser in step 6 and reuse it here.
 - [ ] 9. **`/dashboard` command and login.** Register the command (default enabled, usable in servers and DMs). Reply with a link only if the user has access to at least one server, or is a super admin. Add `superAdmins` to `Configuration` and `blank-config.json`. Add `LoginTokenStore` (one-time tokens tied to a user) and `DashboardSessions` (sessions holding the user ID, super admin flag, CSRF token and expiry; access isn't stored, it's checked per request). Add the stdout recovery login link from step 5 (a super admin token that doesn't need Discord). Add `GET /dashboard/login?token=` (use the token, create the session, redirect) and `POST /dashboard/api/logout`. Thread safety: each request runs on its own thread, so login tokens are used up atomically (`ConcurrentHashMap.remove`, so two tabs can't both redeem one link), and the session store is a concurrent map.
 - [ ] 10. **Web plumbing.** Add a request helper that sends JSON responses with consistent errors, finds the session, checks CSRF on writes, and checks access **per request** with `Access.of(member)` (step 8): admin endpoints need `ADMIN`, the own-entry endpoints need at least `STREAMER`, and super admin sessions can access any guild the bot is in. If Discord is unavailable, super admin sessions still work (the flag is in the session), and guild endpoints return a clear "Discord unavailable" error. Set security headers (`Referrer-Policy: no-referrer`, a strict CSP, `X-Frame-Options: DENY`, `Cache-Control: no-store` on API responses). Serve static files from the classpath.
 - [ ] 11. **JSON API** under `/dashboard/api/guilds/{guildId}/…`:
@@ -286,14 +315,16 @@ Every file under `data/` must keep loading after a deploy, with nothing lost and
   - `GET …/streamers` (adds Twitch display name and login, fetched in batches), `POST …/streamers`, `PATCH …/streamers/{twitchId}`, `DELETE …/streamers/{twitchId}`
   - `GET …/self-service`, `PUT …/self-service` (the whole role → channel list plus `removeAfterDays`; each role and channel is checked to belong to the guild). `PATCH …/streamers/{twitchId}` with `channelOverridePinned: false` unpins a self-added streamer and recalculates their channel from their roles straight away. Any channel change by an admin pins.
   - `GET …/audit?type=&before=`: this server's audit log, paged and newest first. Super-admin-only entries are left out for normal sessions.
-  - `GET …/problems`: recorded failures (step 4), the live permission check results (step 6), and a one-line "Twitch is having problems, posts may be delayed" flag when the system's Twitch status is red (no details, which are for super admins). `DELETE …/problems/{id}` and `DELETE …/problems` dismiss entries.
+  - `POST …/diagnose`: runs Diagnose now and returns the results. `?streamer={twitchId}` limits it to one streamer.
+  - `GET …/problems`: recorded failures (step 4), the latest Diagnose results (step 6), and a one-line "Twitch is having problems, posts may be delayed" flag when the system's Twitch status is red (no details, which are for super admins). `DELETE …/problems/{id}` and `DELETE …/problems` dismiss entries.
   - Super admin only: `GET /dashboard/api/admin/guilds` (all servers with the summary fields above), `enabledTwitchTracking` accepted in `PATCH …/settings`, `POST /dashboard/api/admin/guilds/{guildId}/leave` (`{confirmName, reason, block}`), `GET /dashboard/api/admin/blocked`, `DELETE /dashboard/api/admin/blocked/{guildId}`, and `GET /dashboard/api/admin/audit?guild=&type=&before=` (paged, newest first). All return 403 for normal sessions.
   - Super admin only: `GET /dashboard/api/admin/system` (status cards, uptime, version and counts), `GET /dashboard/api/admin/system/log?component=&severity=&before=`, and `DELETE /dashboard/api/admin/system/log/{id}`.
   - Every channel ID and role ID sent in is checked to belong to that guild.
 - [ ] 12. **Frontend:** for **streamer-level** access, a simple "My stream" page: status, the Twitch channel set/remove, and the message editor. The editor lists the variables, shows a live preview, and only offers the mentions they're allowed; disallowed ones are greyed out with the reason. For **admin** access: an **Access** section (admin roles, read-only with an explanation for those who can't edit it), a **Message permissions** section (rules per role: allow `@everyone`/`@here` and a multi-select of allowed role mentions), a settings form, a streamer table with add, edit and delete (with "self-added", "paused since …" and "pinned" badges, and a "Go back to role-based" button), a **Self-service** section, and the Audit tab (step 3's log). The Self-service section lists the configured roles **sorted by Discord role order**, so the precedence is visible. Each has a channel picker or "server default", plus add and remove buttons, and the "remove after N days without the role" setting (0 = never). It explains that the highest role wins even with no override. It shows server-side validation errors next to the field they belong to. It handles an expired session by showing "run /dashboard again". Problems:
-  - A **Problems** panel at the top whenever there's anything to report. It shows current permission-check failures, recent recorded failures (newest first, with count and last seen), and a banner when Twitch is failing for the whole bot (no details).
+  - A **Problems** panel at the top whenever there's anything to report. It shows current Diagnose errors and warnings, recent recorded failures (newest first, with count and last seen), and a banner when Twitch is failing for the whole bot (no details).
   - Warnings next to the setting or streamer row they relate to, e.g. a "can't post here" badge on the channel picker.
-  - Saving a setting runs the permission check immediately, so a newly picked channel the bot can't post in gets flagged straight away.
+  - A **Diagnose** button on the Problems panel, and a "Diagnose" action on each streamer row. It shows the results grouped by streamer (✓, warning or error per check, the reason, and a fix hint), with server-wide issues first. A summary line reads like "12 streamers checked: 9 OK, 2 warnings, 1 error".
+  - Diagnose also runs automatically on load and after every save, so a newly picked channel the bot can't post in gets flagged straight away. Each streamer row shows a status badge from the latest result.
 - [ ] 13. **Super admin additions to the frontend:** when `GET /dashboard/api/me` says the session is a super admin, show the server switcher sidebar (from `GET /dashboard/api/admin/guilds`), the "Super admin" badge, the Twitch on/off toggle, the "Remove bot from server" button with its type-the-name confirmation, the Blocked servers list, and the **System** page (status cards, system log, and the red dot on the sidebar item when anything is red; it works when Discord is down). Normal sessions with access to more than one server get a simple dropdown to switch between them instead.
 - [ ] 14. **Make `enabledTwitchTracking` actually control the Twitch watcher.** Today the flag only blocks commands. `ensureSubscriptionToEvents` and `handleNotification` ignore it, so a disabled server with streamers still gets subscriptions and live posts. Skip disabled servers in both places, and call `triggerUpdate()` when the flag changes so subscriptions are added or removed straight away.
 - [ ] 15. **Remove and block servers (backend).** Add the optional block fields to `ServerInfo`. `ServerSettings.leaveGuild(guildId, reason, block, byUser)` saves the block first, then calls `guild.leave()`, then `triggerUpdate()`, and writes the action to the stdout log. Add a `GuildJoinEvent` listener and a startup sweep that leave blocked servers. Finding all blocked servers means scanning `data/servers/*.json` for `blocked: true`; that's cheap at this scale, and it keeps the block in the per-server file.
@@ -305,7 +336,11 @@ Every file under `data/` must keep loading after a deploy, with nothing lost and
   
   Step 15 ships before this one, so its listener gets the audit call added here.
 - [ ] 17. **Docs:** update the README with the dashboard, who can access it (Administrator, admin roles, streamers), message permissions, the new commands (`/addadminrole`, `/removeadminrole`, `/addmessagerole`, `/removemessagerole`), the `/dashboard` command, self-service adding (`/settwitchchannel`, `/removetwitchchannel`, `/addselfservicerole`, `/removeselfservicerole`, and the role precedence rule), the requirement that the reverse proxy sends `X-Forwarded-Proto`, and the `superAdmins` config key. Update CLAUDE.md with the new classes.
-- [ ] 18. **Test end to end with the dev bot:** run `/dashboard`, log in, change every setting, check that the matching command output agrees, and check that a second login link and an expired token are both rejected. Problems: remove the bot's Send Messages permission in the live channel, delete the live role, and move the live role above the bot's role. Check that each one shows up in the permission check and, after a live event, in the recorded failures. System health:
+- [ ] 18. **Test end to end with the dev bot:** run `/dashboard`, log in, change every setting, check that the matching command output agrees, and check that a second login link and an expired token are both rejected. Problems and Diagnose:
+  - Remove the bot's Send Messages permission in the live channel with a channel override only, delete the live role, and move the live role above the bot's role. Check that each one shows up in Diagnose **without anyone going live**, and in the recorded failures after a live event.
+  - Put a non-mentionable role and `@everyone` in a streamer's template without giving the bot Mention Everyone: Diagnose warns about both. Make the role mentionable: the role warning clears.
+  - Give one streamer an override channel the bot can't see: only that streamer shows an error.
+  - Point a streamer at an announcement channel: Diagnose flags it until the Known bugs fix lands, after which it posts. System health:
   - Put a wrong Twitch client secret in a copy of the config and check that Twitch API turns red with the reason and a super admin DM arrives. Restore it, and check that recovery is shown and DM'd.
   - Use an invalid Discord token: startup doesn't crash, the stdout recovery link works, and the System page shows Discord red with "fix and restart".
   - Disable the members intent in the dev portal and check that `DISALLOWED_INTENTS` is shown.
@@ -362,6 +397,7 @@ Other:
 - [ ] `getStreamer` (`TwitchCommandHandler`) matches the wrong streamer when only a Twitch name is given: `discordUserId` is 0, so any streamer with `discordId == 0` matches first. `/deletestreamer twitch-name:X` can delete someone else.
 - [ ] `/addstreamer` with a nonexistent Twitch name NPEs (`getStreamerInfoByUsername` returns null) → generic error instead of a helpful message.
 - [ ] Expired Twitch app token isn't detected in the notification path: `getAuthToken` never checks `twitchAppAccessTokenExpiry`, and failures in `handleNotification` are swallowed, so live posts silently fail until the hourly loop refreshes the token.
+- [ ] Announcement (news) channels are silently skipped: `handleLiveNotification` only accepts `TextChannel`, so a live channel that's an announcement channel never gets posts, and nothing reports it. Fix: accept any `StandardGuildMessageChannel` (text and announcement). Diagnose (step 6) flags it in the meantime.
 - [ ] `${twitch_link}` and `/streamerlist` links use display name instead of login name — breaks for non-Latin display names.
 - [ ] `/setchanneloverride`'s `channel` option is `OptionType.STRING` rather than `CHANNEL`; that's why `getChannelId` has the "JDA bug" `<#…>` stripping workaround.
 - [ ] Live role add/remove is attempted for streamers with no linked Discord user (`discordId == 0`).
