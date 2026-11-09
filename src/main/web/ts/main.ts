@@ -5,16 +5,26 @@ import type { GuildSummary, Me } from "./api.js";
 import { busy, errorMessage, h, replace } from "./dom.js";
 import { api, ApiFailure, setCsrfToken, setSessionExpiredHandler } from "./http.js";
 import type { Page, PageContext } from "./page.js";
+import { auditPage } from "./audit.js";
+import { settingsPage } from "./settings.js";
+import { streamersPage } from "./streamers.js";
 import { streamPage } from "./stream.js";
 
-/** Every page, in tab order. Server admin pages are added here as they're built. */
-const PAGES: Page[] = [streamPage];
+/** Every page, in tab order. A server opens on the first page it offers (admins: Settings, streamers: My stream). */
+const PAGES: Page[] = [settingsPage, streamersPage, auditPage, streamPage];
+
+/** The page a server opens on. */
+function defaultPage(guild: GuildSummary | null): string {
+    const first = guild === null ? undefined : PAGES.find((page) => page.available(guild));
+    return (first ?? PAGES[0]!).id;
+}
 
 const LOGIN_HELP = "Run /dashboard in Discord to get a new login link.";
 
 let me: Me | null = null;
 let current: GuildSummary | null = null;
-let currentPage: string = PAGES[0]!.id;
+/** The page from the URL or the tabs; null for the server's default page. */
+let currentPage: string | null = null;
 /** Bumped on every navigation, so a slow page load can't draw over a newer one. */
 let generation = 0;
 
@@ -65,7 +75,7 @@ function pageFromUrl(): string | null {
 function writeUrl(push: boolean): void {
     const params = new URLSearchParams();
     if (current !== null) params.set("guild", current.id);
-    if (currentPage !== PAGES[0]!.id) params.set("page", currentPage);
+    if (currentPage !== null && currentPage !== defaultPage(current)) params.set("page", currentPage);
     const query = params.toString();
     const url = window.location.pathname + (query.length > 0 ? "?" + query : "");
     if (push) window.history.pushState(null, "", url);
@@ -114,7 +124,7 @@ function drawServerPicker(user: Me): void {
         const guild = user.guilds.find((g) => g.id === select.value);
         if (guild === undefined) return;
         current = guild;
-        currentPage = PAGES[0]!.id;
+        currentPage = null;
         writeUrl(true);
         void openPage();
     });
@@ -129,7 +139,7 @@ function drawNav(guild: GuildSummary): void {
     }
     replace(nav(), h("ul", null, pages.map((page) => {
         const link = h("a", { href: "?guild=" + encodeURIComponent(guild.id) + "&page=" + encodeURIComponent(page.id) }, page.label);
-        if (page.id === currentPage) link.setAttribute("aria-current", "page");
+        if (page.id === (currentPage ?? defaultPage(guild))) link.setAttribute("aria-current", "page");
         link.addEventListener("click", (event) => {
             event.preventDefault();
             currentPage = page.id;
@@ -145,7 +155,11 @@ async function openPage(): Promise<void> {
     const guild = current;
     const pages = PAGES.filter((page) => page.available(guild));
     const page = pages.find((p) => p.id === currentPage) ?? pages[0]!;
-    currentPage = page.id;
+    if (currentPage !== null && currentPage !== page.id) {
+        // Not available on this server (e.g. an admin page after losing admin access): open the default instead.
+        currentPage = null;
+        writeUrl(false);
+    }
     drawServerPicker(me);
     drawNav(guild);
     const run = ++generation;
@@ -215,7 +229,7 @@ function start(): void {
         const id = guildFromUrl();
         current = me.guilds.find((g) => g.id === id) ?? me.guilds[0] ?? null;
         const p = pageFromUrl();
-        currentPage = p !== null && PAGES.some((x) => x.id === p) ? p : PAGES[0]!.id;
+        currentPage = p !== null && PAGES.some((x) => x.id === p) ? p : null;
         void openPage();
     });
     void reloadMe();

@@ -21,6 +21,7 @@
     --preview-bg: #313338;
     --preview-text: #dbdee1;
     --radius: 8px;
+    --ok: #1a7f37;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -40,10 +41,12 @@
         --info-border: #3d5a9e;
         --mention-bg: rgba(88, 101, 242, 0.3);
         --mention-text: #c9cdfb;
+        --ok: #57c26b;
     }
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 
 body {
     margin: 0;
@@ -85,9 +88,9 @@ body {
 }
 .tabs a[aria-current="page"] { color: var(--text); border-bottom-color: var(--accent); }
 
-main { max-width: 860px; margin: 0 auto; padding: 20px 16px 48px; }
-#banner { max-width: 828px; margin: 16px auto 0; }
-@media (max-width: 860px) { #banner { margin: 16px 16px 0; } }
+main { max-width: 1040px; margin: 0 auto; padding: 20px 16px 48px; }
+#banner { max-width: 1008px; margin: 16px auto 0; }
+@media (max-width: 1040px) { #banner { margin: 16px 16px 0; } }
 
 h1 { font-size: 1.5rem; margin: 0 0 16px; }
 h2 { font-size: 1.15rem; margin: 0 0 12px; }
@@ -114,7 +117,7 @@ h3 { font-size: 1rem; margin: 20px 0 6px; }
 .remove { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); }
 
 label { display: block; font-weight: 600; }
-input[type="text"], textarea, select {
+input[type="text"], input[type="number"], textarea, select {
     font: inherit;
     color: inherit;
     background: var(--bg);
@@ -209,3 +212,85 @@ pre.template {
     clip: rect(0 0 0 0);
     white-space: nowrap;
 }
+
+/* --- server admin pages --- */
+
+.card-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.card-head h2, .card-head h3 { margin: 0; }
+h2.inline { display: inline; margin: 0; }
+.small { font-size: 0.85rem; }
+select { max-width: 100%; }
+input[type="number"] { width: 9em; }
+.checkbox { display: flex; align-items: center; gap: 8px; }
+.checkbox label { font-weight: normal; }
+.checkbox input { margin: 0; }
+.picker-note:empty { display: none; }
+.unsaved { color: var(--text); font-style: italic; }
+button.danger-link { color: var(--danger); }
+
+.badge.ok { color: var(--ok); border-color: var(--ok); }
+.badge.info { background: var(--info-bg); border-color: var(--info-border); }
+.badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+
+.problems.has-problems { border-color: var(--warn-border); }
+.diagnose .summary { margin: 0 0 8px; }
+.diagnose-group { border-top: 1px solid var(--border); padding: 6px 0; }
+.diagnose-group summary { cursor: pointer; }
+.checks { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.check { display: flex; gap: 8px; align-items: flex-start; }
+.check-symbol { flex: none; width: 1.4em; height: 1.4em; border-radius: 50%; text-align: center; font-weight: 700; font-size: 0.85rem; line-height: 1.4em; border: 1px solid var(--border); }
+.check.ok .check-symbol { color: var(--ok); border-color: var(--ok); }
+.check.warning .check-symbol { background: var(--warn-bg); border-color: var(--warn-border); }
+.check.error .check-symbol { background: var(--error-bg); border-color: var(--error-border); color: var(--danger); }
+.check .hint { margin: 2px 0 0; }
+.inline-issues { margin: 4px 0 8px; padding: 8px 10px; border-radius: 6px; background: var(--warn-bg); border: 1px solid var(--warn-border); }
+.failures { border-top: 1px solid var(--border); margin-top: 12px; padding-top: 12px; }
+.failure-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.failure-list .hint { margin: 2px 0 0; }
+
+.role-list, .rule-list, .plain-list, .audit-list { list-style: none; margin: 0; padding: 0; }
+.role-list > li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.role-list > li.empty, .rule-list > li.empty { border-bottom: none; }
+.rank { display: inline-block; min-width: 1.6em; text-align: center; border-radius: 999px; background: var(--bg); border: 1px solid var(--border); font-size: 0.85rem; }
+.add-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-top: 8px; }
+.rule-list > li { padding: 10px 0; border-bottom: 1px solid var(--border); }
+.rule-list > li > * + * { margin-top: 6px; }
+.mention-roles summary { cursor: pointer; }
+.checkbox-list { list-style: none; margin: 6px 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 4px 12px; }
+.plain-list > li { padding: 4px 0; }
+
+.chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.variables-help summary { cursor: pointer; color: var(--muted); }
+.variables-help ul { margin: 4px 0; }
+
+.member-picker { display: flex; flex-direction: column; gap: 6px; }
+.member-picker input { max-width: 360px; }
+.member-results { list-style: none; margin: 0; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; max-width: 360px; max-height: 220px; overflow-y: auto; }
+.member-results li { padding: 2px 0; }
+.member-current { font-weight: 600; }
+
+.table-wrap { overflow-x: auto; }
+table.streamers { width: 100%; border-collapse: collapse; }
+table.streamers th, table.streamers td { text-align: left; vertical-align: top; padding: 8px; border-bottom: 1px solid var(--border); }
+table.streamers thead th { color: var(--muted); font-weight: 600; font-size: 0.85rem; }
+table.streamers tbody th { font-weight: 600; }
+table.streamers .actions .row { flex-wrap: wrap; gap: 4px; }
+table.streamers .actions button { padding: 3px 10px; font-size: 0.9rem; }
+.detail-row > td { background: var(--bg); }
+@media (max-width: 760px) {
+    table.streamers thead { display: none; }
+    table.streamers, table.streamers tbody, table.streamers tr, table.streamers th, table.streamers td { display: block; width: 100%; }
+    table.streamers tr { border-bottom: 1px solid var(--border); padding: 6px 0; }
+    table.streamers th, table.streamers td { border-bottom: none; padding: 4px 0; }
+    table.streamers tr[hidden] { display: none; }
+}
+
+.filters label { font-weight: normal; color: var(--muted); }
+.audit-list { margin-top: 12px; }
+.audit-entry { padding: 10px 0; border-top: 1px solid var(--border); overflow-wrap: anywhere; }
+.audit-entry.by-bot-admin { border-left: 3px solid var(--accent); padding-left: 10px; }
+.changes { margin: 4px 0 0; padding-left: 20px; }
+.template-change { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 4px; }
+@media (max-width: 600px) { .template-change { grid-template-columns: 1fr; } }
+.tabs a { white-space: nowrap; }
+table.streamers td .badge { white-space: nowrap; }

@@ -5,10 +5,10 @@ import type { ChannelRef, OwnStreamer, RoleInfo, RolesResponse, Streamer } from 
 import { busy, FormErrors, formatTime, h, replace, type Child } from "./dom.js";
 import { api, ApiFailure } from "./http.js";
 import { guildPath, type Page, type PageContext } from "./page.js";
+import { previewBox, previewNodes } from "./preview.js";
 import {
     checkMentions,
     exampleLength,
-    segments,
     VARIABLE_HELP,
     type MentionKey,
     type MentionRules,
@@ -187,9 +187,6 @@ function localError(field: string, message: string): ApiFailure {
 
 // --- live message ---
 
-const PREVIEW_GAME = "Just Chatting";
-const PREVIEW_TITLE = "Chill stream, come say hi!";
-
 function messageSection(context: PageContext, data: OwnStreamer, streamer: Streamer, redraw: Redraw, savedMessage: string): HTMLElement {
     const section = h("section", { class: "card" }, h("h2", null, "Live message"));
     const saved = streamer.template ?? data.serverTemplate;
@@ -230,7 +227,7 @@ function messageSection(context: PageContext, data: OwnStreamer, streamer: Strea
         length.textContent = count + " / " + data.maxLength + " characters with a long stream title";
         length.classList.toggle("error-text", count > data.maxLength);
         replace(mentionNotes, mentionFeedback(checkMentions(text, saved, rules, context.me.userId), roleNames));
-        replace(preview, previewNodes(text, streamer, myName, roleNames));
+        replace(preview, previewFor(text, streamer, myName, roleNames));
     };
     textarea.addEventListener("input", () => {
         status.textContent = "";
@@ -318,9 +315,7 @@ function messageSection(context: PageContext, data: OwnStreamer, streamer: Strea
         h("h3", null, "Mentions"),
         mentionList,
         h("h3", null, "Preview"),
-        h("div", { class: "preview" },
-            h("div", { class: "preview-author" }, "MorganaBot"),
-            preview),
+        previewBox(preview),
         h("p", { class: "hint" }, "Example stream title and game. Discord formatting isn't shown."));
     section.append(form);
     update();
@@ -402,48 +397,14 @@ function mentionFeedback(check: ReturnType<typeof checkMentions>, roleNames: Map
     return result;
 }
 
-/** The message as it would look, with example Twitch values. Built from text nodes only. */
-function previewNodes(template: string, streamer: Streamer, myName: string, roleNames: Map<string, string>): Child[] {
+/** The message as it would look, with example Twitch values. */
+function previewFor(template: string, streamer: Streamer, myName: string, roleNames: Map<string, string>): Child[] {
     const login = streamer.twitchLogin ?? "your_channel";
-    const display = streamer.twitchDisplayName ?? login;
-    const nodes: Child[] = [];
-    for (const segment of segments(template)) {
-        switch (segment.kind) {
-            case "text":
-                nodes.push(segment.text);
-                break;
-            case "variable":
-                switch (segment.name) {
-                    case "streamer_name":
-                        nodes.push(display);
-                        break;
-                    case "game_name":
-                        nodes.push(PREVIEW_GAME);
-                        break;
-                    case "stream_name":
-                        nodes.push(PREVIEW_TITLE);
-                        break;
-                    case "twitch_link":
-                        nodes.push(h("span", { class: "link" }, "https://www.twitch.tv/" + login));
-                        break;
-                    default:
-                        nodes.push(streamer.discordUserId === null ? "?" : h("span", { class: "mention" }, "@" + myName));
-                }
-                break;
-            case "everyone":
-                nodes.push(h("span", { class: "mention" }, "@everyone"));
-                break;
-            case "here":
-                nodes.push(h("span", { class: "mention" }, "@here"));
-                break;
-            case "role":
-                nodes.push(h("span", { class: "mention" }, "@" + (roleNames.get(segment.id) ?? "unknown-role")));
-                break;
-            case "user":
-                nodes.push(h("span", { class: "mention" }, segment.id === streamer.discordUserId ? "@" + myName : "@user " + segment.id));
-                break;
-        }
-    }
-    return nodes;
+    return previewNodes(template, {
+        display: streamer.twitchDisplayName ?? login,
+        login,
+        discordId: streamer.discordUserId,
+        discordName: myName,
+        roleNames,
+    });
 }
-

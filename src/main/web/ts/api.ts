@@ -124,3 +124,179 @@ export interface RoleInfo {
 export interface RolesResponse {
     roles: RoleInfo[];
 }
+
+// --- server admin pages ---
+
+/** A text or announcement channel, as `GET …/channels` gives it (in Discord's order). */
+export interface ChannelInfo {
+    id: Id;
+    name: string;
+    type: "text" | "announcement";
+    category: string | null;
+    botCanPost: boolean;
+    botCanMentionEveryone: boolean;
+}
+
+export interface ChannelsResponse {
+    channels: ChannelInfo[];
+}
+
+export interface MembersResponse {
+    members: MemberInfo[];
+}
+
+/** `GET …/settings` (and the answer to `PATCH …/settings`). */
+export interface Settings {
+    /** Only sent to super admin sessions. */
+    enabledTwitchTracking?: boolean;
+    twitchDisabledMessage: string | null;
+    liveChannel: ChannelRef | null;
+    liveRole: RoleRef | null;
+    deleteOnOffline: boolean;
+    /** Null: the default message is used. */
+    liveMessageTemplate: string | null;
+    defaultLiveMessageTemplate: string;
+    notificationCooldownSeconds: number;
+    variables: string[];
+    maxLength: number;
+}
+
+/** `GET …/admin-roles` */
+export interface AdminRoles {
+    roles: RoleRef[];
+    canEdit: boolean;
+    readOnlyReason: string | null;
+}
+
+export interface MessageRule {
+    role: RoleRef;
+    allowEveryone: boolean;
+    allowedMentionRoles: RoleRef[];
+}
+
+/** `GET …/message-rules` */
+export interface MessageRules {
+    twitchDisabledMessage: string | null;
+    rules: MessageRule[];
+}
+
+export interface SelfServiceRoleEntry {
+    role: RoleRef;
+    /** Null: the server's default live channel. */
+    channel: ChannelRef | null;
+}
+
+/** `GET …/self-service` (roles highest first, in Discord's role order). */
+export interface SelfServiceConfig {
+    twitchDisabledMessage: string | null;
+    roles: SelfServiceRoleEntry[];
+    removeAfterDays: number;
+    maxRemoveAfterDays: number;
+}
+
+/** `GET …/streamers` */
+export interface StreamersResponse {
+    twitchDisabledMessage: string | null;
+    twitchLookupFailed: boolean;
+    streamers: Streamer[];
+}
+
+export type CheckLevel = "OK" | "WARNING" | "ERROR";
+
+/** One Diagnose check. */
+export interface Check {
+    code: string;
+    level: CheckLevel;
+    message: string;
+    fix: string | null;
+}
+
+export interface StreamerResult {
+    twitchId: Id;
+    twitchLogin: string | null;
+    discordId: Id;
+    channelId: Id;
+    channel: string;
+    level: CheckLevel;
+    checks: Check[];
+}
+
+/** `POST …/diagnose` */
+export interface DiagnoseResult {
+    guildId: Id;
+    time: Id;
+    twitchEnabled: boolean;
+    server: Check[];
+    streamers: StreamerResult[];
+    serverLevel: CheckLevel;
+    streamersOk: number;
+    streamersWithWarnings: number;
+    streamersWithErrors: number;
+    summary: string;
+}
+
+export interface ProblemTarget {
+    kind: "channel" | "role" | "member" | "streamer" | string;
+    id: Id;
+    name: string | null;
+}
+
+/** A recorded failure. */
+export interface Problem {
+    id: string;
+    time: Id;
+    lastSeen: Id;
+    count: number;
+    action: string;
+    target: ProblemTarget | null;
+    streamer: ProblemTarget | null;
+    reason: string;
+}
+
+/** `GET …/problems` */
+export interface ProblemsResponse {
+    problems: Problem[];
+    diagnose: DiagnoseResult | null;
+    twitchTrouble: boolean;
+    twitchMessage: string | null;
+}
+
+export type ActorSource = "command" | "dashboard" | "superAdmin" | "selfService" | "system";
+
+export interface AuditActor {
+    userId: Id | null;
+    name: string | null;
+    source: ActorSource;
+    command: string | null;
+}
+
+export interface AuditValue {
+    kind: "channel" | "role" | "user" | "twitch" | "text" | "boolean" | "number" | string;
+    id?: Id | null;
+    name?: string | null;
+    value?: string | null;
+}
+
+/** `old`/`new` as AuditEntry.Change serializes them; null (or missing) means unset. */
+export interface AuditChange {
+    field: string;
+    old: AuditValue | null;
+    new: AuditValue | null;
+}
+
+export interface AuditEntry {
+    time: Id;
+    type: string;
+    actor: AuditActor | null;
+    visibility: "server" | "superAdmin" | string;
+    streamer: AuditValue | null;
+    subject: AuditValue | null;
+    changes: AuditChange[];
+    note: string | null;
+}
+
+/** `GET …/audit` */
+export interface AuditPage {
+    entries: AuditEntry[];
+    nextBefore: Id | null;
+}
