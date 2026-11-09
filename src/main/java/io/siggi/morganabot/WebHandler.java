@@ -66,7 +66,8 @@ public class WebHandler {
         GuildData.Provider guilds = JdaGuildData.provider(bot::getJDA, bot::getDiagnose);
         new DashboardApi(bot.getServerInfoStore(), bot.getServerSettings(), bot.getAccess(), bot.getAuditLog(),
                 bot.getServerProblems(), guilds, this::twitchUsers, this::twitchTrouble).register(api);
-        new AdminApi(bot.getServerInfoStore(), bot.getServerProblems(), guilds, bot::getSystemHealth).register(api);
+        new AdminApi(bot.getServerInfoStore(), bot.getServerSettings(), bot.getServerProblems(), guilds,
+                bot::getSystemHealth).register(api);
         api.register(httpServer);
         new StaticFiles(WebHandler.class.getClassLoader(), "web").register(httpServer);
         (thread = new Thread(() -> {

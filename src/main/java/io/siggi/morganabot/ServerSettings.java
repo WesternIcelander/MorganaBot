@@ -8,6 +8,7 @@ import io.siggi.morganabot.config.ServerInfo;
 import io.siggi.morganabot.config.ServerInfoStore;
 
 import java.io.IOException;
+import java.io.PrintStream;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
@@ -112,6 +113,37 @@ public class ServerSettings {
     }
 
     /**
+     * The servers the bot is in, for removing it from one. In production it's JDA.
+     */
+    public interface Guilds {
+        /** The server's name, or null if the bot isn't in it (or Discord is unavailable). */
+        String name(long guildId);
+
+        /** Leaves the server and waits until Discord confirms it. */
+        void leave(long guildId) throws Exception;
+
+        /** A Discord user's name (for the log), or null if unknown. */
+        String userName(long userId);
+
+        Guilds NONE = new Guilds() {
+            @Override
+            public String name(long guildId) {
+                return null;
+            }
+
+            @Override
+            public void leave(long guildId) throws Exception {
+                throw new IllegalStateException("Discord is unavailable");
+            }
+
+            @Override
+            public String userName(long userId) {
+                return null;
+            }
+        };
+    }
+
+    /**
      * Which self-service role applies to a member, and the channel it gives.
      *
      * @param roleId    the member's highest self-service role, or 0 if they have none (not eligible)
@@ -175,6 +207,8 @@ public class ServerSettings {
     private final AuditLog auditLog;
     private volatile Members members = Members.NONE;
     private volatile Access access;
+    private volatile Guilds guilds = Guilds.NONE;
+    private PrintStream log = System.out;
     private LongSupplier clock = System::currentTimeMillis;
     /**
      * Last {@link #selfSetTwitch} per "guildId:userId", for the rate limit.
@@ -204,6 +238,20 @@ public class ServerSettings {
      */
     public void setMembers(Members members) {
         this.members = members == null ? Members.NONE : members;
+    }
+
+    /**
+     * Sets how servers are left and named (JDA in production). Without this, {@link #leaveGuild} always fails.
+     */
+    public void setGuilds(Guilds guilds) {
+        this.guilds = guilds == null ? Guilds.NONE : guilds;
+    }
+
+    /**
+     * Where {@link #leaveGuild} and {@link #unblock} write their stdout log line.
+     */
+    void setLog(PrintStream log) {
+        this.log = log;
     }
 
     /**
@@ -381,6 +429,146 @@ public class ServerSettings {
         // The watcher only subscribes for servers with Twitch on, so add or remove subscriptions straight away.
         if (changed) twitch.triggerUpdate();
         return changed;
+    }
+
+    // --- removing and blocking servers (super admins only; the caller checks that) ---
+
+    /** The longest reason accepted for removing or blocking a server. */
+    public static final int MAX_BLOCK_REASON = 500;
+
+    /**
+     * What happened in {@link #leaveGuild}.
+     *
+     * @param guildName the server's name when the bot left
+     * @param blocked   whether it's now blocked from adding the bot back
+     */
+    public record LeaveResult(String guildName, boolean blocked) {
+    }
+
+    /**
+     * A blocked server, from its settings file.
+     */
+    public record BlockedServer(long guildId, String name, long blockedAt, long blockedBy, String blockedByName,
+                                String reason) {
+    }
+
+    /**
+     * Removes the bot from a server, optionally blocking it from adding the bot back. The block is saved first (so a
+     * failed or interrupted leave still ends with the bot leaving on its next join or startup), then the bot leaves,
+     * then the Twitch subscriptions are synced. The action is written to stdout.
+     *
+     * @param reason optional note, at most {@link #MAX_BLOCK_REASON} characters
+     * @param byUser the super admin doing it
+     * @throws SettingsException if the bot isn't in the server, the reason is too long, or leaving failed (the block,
+     *                           if asked for, is kept)
+     */
+    public LeaveResult leaveGuild(long guildId, String reason, boolean block, long byUser) throws SettingsException {
+        String note = normalizeReason(reason);
+        Guilds g = guilds;
+        String name = g.name(guildId);
+        if (name == null) {
+            throw new SettingsException("The bot isn't in that server (or Discord is unavailable).");
+        }
+        String byName = g.userName(byUser);
+        if (block) {
+            long now = clock.getAsLong();
+            store.modify(guildId, serverInfo -> {
+                serverInfo.blocked = true;
+                serverInfo.blockedAt = now;
+                serverInfo.blockedBy = byUser;
+                serverInfo.blockedByName = byName;
+                serverInfo.blockedReason = note;
+                serverInfo.blockedName = name;
+                return null;
+            });
+        }
+        try {
+            g.leave(guildId);
+        } catch (Exception e) {
+            log.println("[Super admin] " + who(byUser, byName) + " tried to remove the bot from " + where(guildId, name)
+                    + (block ? " (blocked)" : "") + reasonText(note) + ", but leaving failed: " + e);
+            if (block) twitch.triggerUpdate();
+            throw new SettingsException("Couldn't leave the server: " + (e.getMessage() == null ? e.toString() : e.getMessage())
+                    + (block ? " The block is saved, so the bot leaves when it next starts or is added again." : ""));
+        }
+        twitch.triggerUpdate();
+        log.println("[Super admin] " + who(byUser, byName) + " removed the bot from " + where(guildId, name)
+                + (block ? " and blocked it from adding the bot back" : "") + reasonText(note));
+        return new LeaveResult(name, block);
+    }
+
+    /**
+     * Lifts a server's block. It doesn't add the bot back; the server has to invite it again.
+     *
+     * @return the block that was lifted, or null if the server wasn't blocked
+     */
+    public BlockedServer unblock(long guildId, long byUser) {
+        BlockedServer lifted = store.modify(guildId, serverInfo -> {
+            if (!serverInfo.blocked) return null;
+            BlockedServer was = blockedServer(guildId, serverInfo);
+            serverInfo.clearBlock();
+            return was;
+        });
+        if (lifted != null) {
+            log.println("[Super admin] " + who(byUser, guilds.userName(byUser)) + " unblocked " + where(guildId, lifted.name()));
+        }
+        return lifted;
+    }
+
+    /**
+     * Every blocked server, newest block first. Scans all server files; unreadable ones are skipped.
+     */
+    public List<BlockedServer> blockedServers() {
+        List<BlockedServer> list = new ArrayList<>();
+        for (long guildId : store.guildIds()) {
+            ServerInfo info;
+            try {
+                info = store.get(guildId);
+            } catch (RuntimeException e) {
+                continue;
+            }
+            if (info.blocked) list.add(blockedServer(guildId, info));
+        }
+        list.sort((a, b) -> Long.compare(b.blockedAt(), a.blockedAt()));
+        return list;
+    }
+
+    /**
+     * Whether the server is blocked. An unreadable file counts as not blocked (it's reported elsewhere), so a broken
+     * hand edit can't make the bot leave a server.
+     */
+    public boolean isBlocked(long guildId) {
+        try {
+            return store.get(guildId).blocked;
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    private static BlockedServer blockedServer(long guildId, ServerInfo info) {
+        return new BlockedServer(guildId, info.blockedName, info.blockedAt, info.blockedBy, info.blockedByName,
+                info.blockedReason);
+    }
+
+    private static String normalizeReason(String reason) throws SettingsException {
+        if (reason == null || reason.isBlank()) return null;
+        String trimmed = reason.trim();
+        if (trimmed.length() > MAX_BLOCK_REASON) {
+            throw new SettingsException("The reason is too long (at most " + MAX_BLOCK_REASON + " characters).");
+        }
+        return trimmed;
+    }
+
+    private static String who(long userId, String name) {
+        return (name == null ? "user" : name) + " (" + userId + ")";
+    }
+
+    private static String where(long guildId, String name) {
+        return (name == null ? "server" : "server \"" + name + "\"") + " (" + guildId + ")";
+    }
+
+    private static String reasonText(String reason) {
+        return reason == null ? "" : ". Reason: " + reason;
     }
 
     /**

@@ -1,7 +1,7 @@
 // The "Settings" page for server admins: the Problems panel, live notification settings, the server-wide live
 // message, self-service roles, message permissions and admin roles.
 
-import type { AdminRoles, GuildSummary, MessageRules, RoleInfo, SelfServiceConfig, Settings } from "./api.js";
+import type { AdminRoles, GuildSummary, LeaveResult, MessageRules, RoleInfo, SelfServiceConfig, Settings } from "./api.js";
 import {
     badge,
     channelPicker,
@@ -19,6 +19,7 @@ import { busy, FormErrors, h, replace, type Child } from "./dom.js";
 import { api, ApiFailure } from "./http.js";
 import { guildPath, type Page, type PageContext } from "./page.js";
 import { ProblemsPanel } from "./problems.js";
+import { confirmNameMatches } from "./super-text.js";
 import { templateEditor } from "./template-editor.js";
 
 export const settingsPage: Page = {
@@ -58,7 +59,8 @@ async function renderSettingsPage(root: HTMLElement, context: PageContext): Prom
         serverTemplateSection(admin, settings),
         selfServiceSection(admin, selfService),
         messageRulesSection(admin, rules),
-        accessSection(admin, adminRoles));
+        accessSection(admin, adminRoles),
+        settings.enabledTwitchTracking !== undefined ? removeSection(context) : null);
     await panel.load();
 }
 
@@ -96,6 +98,67 @@ function twitchSection(context: PageContext, settings: Settings, redraw: () => P
         h("div", { class: "row" }, toggle),
         errors.field("enabledTwitchTracking", toggle),
         errors.general);
+}
+
+/**
+ * "Remove bot from server" (super admins only; settings with `enabledTwitchTracking` are only sent to them). The
+ * button only works once the server's name is typed exactly. Blocking is on by default, since without it anyone with
+ * an invite link could add the bot back.
+ */
+function removeSection(context: PageContext): HTMLElement {
+    const name = context.guild.name;
+    const errors = new FormErrors();
+    const confirmInput = h("input", { id: "remove-confirm", type: "text", autocomplete: "off" });
+    const reason = h("textarea", { id: "remove-reason", rows: 2, maxlength: 500 });
+    const block = h("input", { id: "remove-block", type: "checkbox", checked: true });
+    const submit = h("button", { type: "submit", class: "danger", disabled: true }, "Remove bot from server");
+    confirmInput.addEventListener("input", () => {
+        submit.disabled = !confirmNameMatches(confirmInput.value, name);
+    });
+    const form = h("form", { class: "stack", novalidate: true },
+        h("div", null,
+            h("label", { for: "remove-confirm" }, "Type the server's name to confirm: ", h("strong", null, name)),
+            confirmInput,
+            errors.field("confirmName", confirmInput)),
+        h("div", null,
+            h("label", { for: "remove-reason" }, "Reason (optional, only bot admins see it)"),
+            reason,
+            errors.field("reason", reason)),
+        h("div", { class: "checkbox" }, block, h("label", { for: "remove-block" }, "Block from re-adding")),
+        h("p", { class: "hint" }, "Without a block, anyone with an invite link can add the bot back. The server's settings are kept either way, so unblocking and re-inviting restores them."),
+        h("div", { class: "row" }, submit),
+        errors.general);
+    const section = h("section", { class: "card super-only danger-zone", "aria-labelledby": "remove-title" },
+        h("div", { class: "card-head" },
+            h("h2", { id: "remove-title" }, "Remove bot from server"),
+            h("span", { class: "badge super" }, "Super admin")),
+        h("p", null, "The bot leaves this server straight away. Its live posts stop and its Twitch subscriptions are dropped."),
+        form);
+    form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        errors.clear();
+        if (!confirmNameMatches(confirmInput.value, name)) {
+            errors.show(localError("confirmName", "Type the server's name exactly as shown."));
+            return;
+        }
+        void busy(submit, async () => {
+            let result: LeaveResult;
+            try {
+                result = await api<LeaveResult>("POST", "/admin/guilds/" + encodeURIComponent(context.guild.id) + "/leave",
+                    { confirmName: confirmInput.value, reason: reason.value, block: block.checked });
+            } catch (error) {
+                errors.show(error);
+                return;
+            }
+            replace(section,
+                h("h2", null, "Removed"),
+                h("p", { class: "saved", role: "status" }, "The bot left " + result.name + (result.blocked ? " and blocked it from adding the bot back." : ".")));
+            context.serverRemoved(result.blocked);
+        }).finally(() => {
+            submit.disabled = !confirmNameMatches(confirmInput.value, name);
+        });
+    });
+    return section;
 }
 
 /** A place for Diagnose's warnings about one setting, kept up to date. */

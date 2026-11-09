@@ -430,12 +430,12 @@ public class TwitchStreamerWatcher {
     /**
      * Updates the streaming state of the server's entries for this streamer and decides, per entry (in order, paused
      * entries left out, see {@link #skip}), whether to post a message (false while the notification cooldown runs).
-     * Returns an empty list when the server has Twitch off ({@code enabledTwitchTracking}): nothing is posted or
+     * Returns an empty list when the server has Twitch off ({@code enabledTwitchTracking}) or is blocked: nothing is posted or
      * changed there.
      */
     static List<Boolean> recordNotification(ServerInfo info, String streamerId, boolean goingOnline, long now) {
         List<Boolean> postMessages = new ArrayList<>();
-        if (!info.enabledTwitchTracking) return postMessages;
+        if (!info.enabledTwitchTracking || info.blocked) return postMessages;
         for (ServerInfo.Streamer streamer : info.streamers) {
             if (skip(streamer, streamerId, goingOnline)) continue;
             if (streamerId.equals(streamer.twitchId)) {
@@ -748,11 +748,11 @@ public class TwitchStreamerWatcher {
 
     /**
      * The Twitch IDs this server needs EventSub subscriptions for: none when Twitch is off for the server
-     * ({@code enabledTwitchTracking}), otherwise every streamer entry.
+     * ({@code enabledTwitchTracking}) or the server is blocked (the bot is leaving it), otherwise every streamer entry.
      */
     static Set<String> trackedStreamerIds(ServerInfo serverInfo) {
         Set<String> ids = new LinkedHashSet<>();
-        if (!serverInfo.enabledTwitchTracking) return ids;
+        if (!serverInfo.enabledTwitchTracking || serverInfo.blocked) return ids;
         for (ServerInfo.Streamer streamer : serverInfo.streamers) {
             if (streamer.twitchId != null) ids.add(streamer.twitchId);
         }

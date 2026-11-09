@@ -98,6 +98,9 @@ class DashboardApiTest {
     private String base;
     private final java.util.concurrent.atomic.AtomicLong clock = new java.util.concurrent.atomic.AtomicLong(1_000_000L);
     private SystemHealth health;
+    /** Servers the bot has left (by {@link ServerSettings#leaveGuild}); the fake provider no longer returns them. */
+    private final java.util.Set<Long> leftGuilds = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private final java.util.concurrent.atomic.AtomicInteger twitchUpdates = new java.util.concurrent.atomic.AtomicInteger();
 
     /** A fake Discord server. */
     private static final class FakeGuild implements GuildData {
@@ -229,8 +232,11 @@ class DashboardApiTest {
             return byLogin.get(login.toLowerCase(Locale.ROOT));
         }
 
+        java.util.concurrent.atomic.AtomicInteger updates;
+
         @Override
         public void triggerUpdate() {
+            if (updates != null) updates.incrementAndGet();
         }
     }
 
@@ -240,6 +246,7 @@ class DashboardApiTest {
         auditLog = new AuditLog(tempDir.toFile(), new Gson(), store, AuditLog.Names.NONE);
         problems = new ServerProblems(tempDir.toFile(), new Gson(), store);
         FakeTwitch twitch = new FakeTwitch();
+        twitch.updates = twitchUpdates;
         for (String[] user : new String[][]{{"1001", "alice"}, {"1002", "bob"}, {"1003", "carol"}}) {
             TwitchUser u = new TwitchUser(user[0], user[1], user[1].toUpperCase(Locale.ROOT));
             twitch.byLogin.put(user[1], u);
@@ -291,12 +298,15 @@ class DashboardApiTest {
         GuildData.Provider provider = new GuildData.Provider() {
             @Override
             public GuildData guild(long guildId) {
+                if (leftGuilds.contains(guildId)) return null;
                 return guildId == GUILD ? guild : guildId == OTHER_GUILD ? otherGuild : null;
             }
 
             @Override
             public List<GuildData> all() {
-                return List.of(guild, otherGuild);
+                List<GuildData> all = new ArrayList<>();
+                for (GuildData g : List.of(guild, otherGuild)) if (!leftGuilds.contains(g.id())) all.add(g);
+                return all;
             }
 
             @Override
@@ -327,7 +337,29 @@ class DashboardApiTest {
         new DashboardApi(store, settings, access, auditLog, problems, provider, lookup, twitchRed::get).register(api);
         health = new SystemHealth(new SystemLog(tempDir.resolve("system-log.jsonl").toFile(), new Gson()), clock::get);
         health.setGeneralInfo(() -> Map.of("startedAt", 5L, "uptimeMillis", 90_500L, "version", "1.2.3", "servers", 2, "streamersTracked", 2));
-        new AdminApi(store, problems, provider, () -> health).register(api);
+        settings.setGuilds(new ServerSettings.Guilds() {
+            @Override
+            public String name(long guildId) {
+                try {
+                    GuildData g = provider.guild(guildId);
+                    return g == null ? null : g.name();
+                } catch (ApiError e) {
+                    return null;
+                }
+            }
+
+            @Override
+            public void leave(long guildId) throws Exception {
+                if (provider.guild(guildId) == null) throw new IllegalStateException("not in it");
+                leftGuilds.add(guildId);
+            }
+
+            @Override
+            public String userName(long userId) {
+                return "user" + userId;
+            }
+        });
+        new AdminApi(store, settings, problems, provider, () -> health).register(api);
 
         HTTPServer server = new HTTPServerBuilder().setSessions(sessions).build();
         api.register(server);
@@ -890,7 +922,11 @@ class DashboardApiTest {
             assertEquals(403, get(login, "/admin/system").code());
             assertEquals(403, get(login, "/admin/system/log").code());
             assertEquals(403, request("DELETE", login, "/admin/system/log/" + id, null).code());
+            assertEquals(403, request("POST", login, "/admin/guilds/100/leave", "{\"confirmName\": \"Main\"}").code());
+            assertEquals(403, get(login, "/admin/blocked").code());
+            assertEquals(403, request("DELETE", login, "/admin/blocked/100", null).code());
         }
+        assertTrue(leftGuilds.isEmpty(), "nothing left");
         assertEquals(1, health.getLog().list().size(), "nothing dismissed");
     }
 
@@ -946,6 +982,68 @@ class DashboardApiTest {
         // A server without a settings file yet can be switched on.
         assertEquals(200, request("PATCH", sa, "/guilds/200/settings", "{\"enabledTwitchTracking\": true}").code());
         assertTrue(store.get(OTHER_GUILD).enabledTwitchTracking);
+    }
+
+    @Test
+    void superAdminRemovesAndBlocksAServer() throws IOException {
+        Login sa = login(SUPER, true);
+        // The name must be typed exactly.
+        Response missing = request("POST", sa, "/admin/guilds/100/leave", "{}");
+        assertEquals(400, missing.code());
+        assertEquals("confirmName", missing.field());
+        Response wrong = request("POST", sa, "/admin/guilds/100/leave", "{\"confirmName\": \"main\"}");
+        assertEquals(400, wrong.code());
+        assertEquals("confirmName", wrong.field());
+        Response tooLong = request("POST", sa, "/admin/guilds/100/leave",
+                "{\"confirmName\": \"Main\", \"reason\": \"" + "x".repeat(ServerSettings.MAX_BLOCK_REASON + 1) + "\"}");
+        assertEquals(400, tooLong.code());
+        assertEquals("reason", tooLong.field());
+        assertEquals(404, request("POST", sa, "/admin/guilds/555/leave", "{\"confirmName\": \"Main\"}").code());
+        assertTrue(leftGuilds.isEmpty());
+        assertTrue(get(sa, "/admin/blocked").json().getAsJsonArray("blocked").isEmpty());
+
+        // Block is on by default.
+        int updates = twitchUpdates.get();
+        Response left = request("POST", sa, "/admin/guilds/100/leave", "{\"confirmName\": \" Main \", \"reason\": \" spam \"}");
+        assertEquals(200, left.code(), left.body());
+        assertTrue(left.json().get("blocked").getAsBoolean());
+        assertEquals("Main", left.json().get("name").getAsString());
+        assertTrue(leftGuilds.contains(GUILD));
+        assertTrue(twitchUpdates.get() > updates, "subscriptions are synced");
+        ServerInfo info = store.get(GUILD);
+        assertTrue(info.blocked);
+        assertEquals(SUPER, info.blockedBy);
+        assertEquals("user" + SUPER, info.blockedByName);
+        assertEquals("spam", info.blockedReason);
+        assertEquals("Main", info.blockedName);
+        assertTrue(info.blockedAt > 0L);
+        assertEquals(2, info.streamers.size(), "settings are kept");
+        assertEquals(1, get(sa, "/admin/guilds").json().getAsJsonArray("guilds").size());
+
+        // Removing without a block.
+        Response other = request("POST", sa, "/admin/guilds/200/leave", "{\"confirmName\": \"Other\", \"block\": false}");
+        assertEquals(200, other.code(), other.body());
+        assertFalse(other.json().get("blocked").getAsBoolean());
+        assertFalse(store.get(OTHER_GUILD).blocked);
+        assertTrue(leftGuilds.contains(OTHER_GUILD));
+
+        JsonObject blocked = get(sa, "/admin/blocked").json();
+        JsonArray list = blocked.getAsJsonArray("blocked");
+        assertEquals(1, list.size());
+        JsonObject entry = list.get(0).getAsJsonObject();
+        assertEquals("100", entry.get("id").getAsString());
+        assertEquals("Main", entry.get("name").getAsString());
+        assertEquals(String.valueOf(SUPER), entry.get("blockedBy").getAsString());
+        assertEquals("spam", entry.get("reason").getAsString());
+        assertFalse(entry.get("inServer").getAsBoolean());
+
+        Response unblocked = request("DELETE", sa, "/admin/blocked/100", null);
+        assertEquals(200, unblocked.code(), unblocked.body());
+        assertFalse(store.get(GUILD).blocked);
+        assertNull(store.get(GUILD).blockedReason);
+        assertEquals(2, store.get(GUILD).streamers.size());
+        assertTrue(get(sa, "/admin/blocked").json().getAsJsonArray("blocked").isEmpty());
+        assertEquals(404, request("DELETE", sa, "/admin/blocked/100", null).code());
     }
 
     @Test

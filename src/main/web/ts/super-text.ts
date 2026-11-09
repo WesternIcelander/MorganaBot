@@ -1,7 +1,7 @@
 // Super admin views in words: the server switcher's filter and the System page's values. No DOM here, so this runs
 // under the Node tests.
 
-import type { AdminGuild, HealthDetail, HealthState, LogSeverity } from "./api.js";
+import type { AdminGuild, BlockedServer, HealthDetail, HealthState, LogSeverity } from "./api.js";
 import { duration } from "./audit-text.js";
 
 export interface GuildFilter {
@@ -121,4 +121,24 @@ export function logQuery(component: string, severity: string, before: string | n
     if (before !== null) params.set("before", before);
     const query = params.toString();
     return query.length > 0 ? "?" + query : "";
+}
+
+/**
+ * Whether the name typed into the "Remove bot from server" confirmation matches the server's name. Exact, apart from
+ * spaces at either end (the server checks the same).
+ */
+export function confirmNameMatches(typed: string, name: string): boolean {
+    const t = typed.trim();
+    return t.length > 0 && t === name.trim();
+}
+
+/** A blocked server's name for the list: its name at the time, or a stand-in. */
+export function blockedName(server: BlockedServer): string {
+    return server.name !== null && server.name.length > 0 ? server.name : "Unknown server";
+}
+
+/** Who blocked a server, e.g. "siggi (260595748465278976)", or "unknown". */
+export function blockedByText(server: BlockedServer): string {
+    if (server.blockedBy === null) return "unknown";
+    return server.blockedByName !== null ? server.blockedByName + " (" + server.blockedBy + ")" : "User " + server.blockedBy;
 }

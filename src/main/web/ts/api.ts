@@ -382,3 +382,30 @@ export interface SystemLogPage {
     nextBefore: Id | null;
     total: number;
 }
+
+/** `POST /admin/guilds/{id}/leave` */
+export interface LeaveResult {
+    left: boolean;
+    /** The server's name when the bot left. */
+    name: string;
+    blocked: boolean;
+}
+
+/** One server in `GET /admin/blocked`. */
+export interface BlockedServer {
+    id: Id;
+    /** The server's name when it was blocked, or null if unknown (e.g. blocked by hand-editing its file). */
+    name: string | null;
+    blockedAt: Id | null;
+    blockedBy: Id | null;
+    blockedByName: string | null;
+    reason: string | null;
+    /** The bot is still in it (it should have left); null when Discord isn't connected. */
+    inServer: boolean | null;
+}
+
+/** `GET /admin/blocked` */
+export interface BlockedServers {
+    discordAvailable: boolean;
+    blocked: BlockedServer[];
+}

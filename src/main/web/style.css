@@ -385,3 +385,10 @@ body.with-sidebar .layout { display: grid; grid-template-columns: 300px minmax(0
 .stack-trace summary { cursor: pointer; color: var(--muted); font-size: 0.9rem; }
 .stack-trace pre { overflow-x: auto; max-height: 360px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-size: 0.8rem; margin: 4px 0 0; }
 .log-footer { margin-top: 10px; }
+
+.super-only.danger-zone { border-color: var(--danger); }
+.danger-zone textarea { font-family: inherit; }
+.blocked-list { list-style: none; margin: 8px 0 0; padding: 0; }
+.blocked-entry { padding: 12px 0; border-top: 1px solid var(--border); overflow-wrap: anywhere; }
+.blocked-entry h3 { margin: 0; }
+.blocked-entry .notice { margin: 6px 0; }

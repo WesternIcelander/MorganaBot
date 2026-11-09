@@ -34,6 +34,34 @@ public class ServerInfo extends Data {
      * nobody but admins can.
      */
     public List<MessageCustomizationRule> messageCustomizationRules = new ArrayList<>();
+    /**
+     * A super admin removed the bot from this server and blocked it: the bot leaves again whenever it's added back
+     * (and at startup if it's still in it). Only super admins set or clear this. The rest of the file is kept, so
+     * unblocking and re-inviting restores the old setup.
+     */
+    public boolean blocked;
+    /** When it was blocked (ms since the epoch), or 0. */
+    public long blockedAt;
+    /** The super admin who blocked it, or 0. */
+    public long blockedBy;
+    /** That super admin's Discord username at the time, or null. */
+    public String blockedByName;
+    /** The reason given, or null. */
+    public String blockedReason;
+    /** The server's name when it was blocked, or null. */
+    public String blockedName;
+
+    /**
+     * Clears every block field.
+     */
+    public void clearBlock() {
+        blocked = false;
+        blockedAt = 0L;
+        blockedBy = 0L;
+        blockedByName = null;
+        blockedReason = null;
+        blockedName = null;
+    }
 
     /**
      * The self-service roles, never null (a hand-edited file may have {@code "selfServiceRoles": null}).

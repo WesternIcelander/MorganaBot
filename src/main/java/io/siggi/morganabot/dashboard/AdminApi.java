@@ -1,5 +1,6 @@
 package io.siggi.morganabot.dashboard;
 
+import io.siggi.morganabot.ServerSettings;
 import io.siggi.morganabot.config.ServerInfo;
 import io.siggi.morganabot.config.ServerInfoStore;
 import io.siggi.morganabot.dashboard.ApiRouter.Requirement;
@@ -11,6 +12,7 @@ import io.siggi.morganabot.health.SystemLog;
 import io.siggi.morganabot.health.SystemLogEntry;
 import io.siggi.morganabot.problems.ServerProblems;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -28,6 +30,10 @@ import java.util.function.Supplier;
  *     <li>{@code GET /admin/system/log?component=&severity=&before=&limit=}: the system log, most recently seen first,
  *     paged by last-seen time</li>
  *     <li>{@code DELETE /admin/system/log/{id}}: dismisses one entry</li>
+ *     <li>{@code POST /admin/guilds/{id}/leave} ({@code {confirmName, reason, block}}): removes the bot from a server,
+ *     blocking it from adding the bot back unless {@code block} is false. Needs Discord.</li>
+ *     <li>{@code GET /admin/blocked}: every blocked server, newest block first</li>
+ *     <li>{@code DELETE /admin/blocked/{id}}: unblocks a server (doesn't add the bot back)</li>
  * </ul>
  * Turning Twitch on or off for a server is {@code PATCH /guilds/{guildId}/settings} ({@link DashboardApi}).
  */
@@ -65,12 +71,15 @@ public final class AdminApi {
     }
 
     private final ServerInfoStore store;
+    private final ServerSettings settings;
     private final ServerProblems problems;
     private final GuildData.Provider guilds;
     private final Supplier<SystemHealth> health;
 
-    public AdminApi(ServerInfoStore store, ServerProblems problems, GuildData.Provider guilds, Supplier<SystemHealth> health) {
+    public AdminApi(ServerInfoStore store, ServerSettings settings, ServerProblems problems, GuildData.Provider guilds,
+                    Supplier<SystemHealth> health) {
         this.store = store;
+        this.settings = settings;
         this.problems = problems;
         this.guilds = guilds;
         this.health = health;
@@ -81,6 +90,79 @@ public final class AdminApi {
         api.get("/admin/system", Requirement.SUPER_ADMIN, this::system);
         api.get("/admin/system/log", Requirement.SUPER_ADMIN, this::log);
         api.delete("/admin/system/log/{id}", Requirement.SUPER_ADMIN, this::dismissLog);
+        api.post("/admin/guilds/{id}/leave", Requirement.SUPER_ADMIN, this::leave);
+        api.get("/admin/blocked", Requirement.SUPER_ADMIN, this::blocked);
+        api.delete("/admin/blocked/{id}", Requirement.SUPER_ADMIN, this::unblock);
+    }
+
+    // --- removing and blocking servers ---
+
+    static final class LeaveBody {
+        String confirmName;
+        String reason;
+        Boolean block;
+    }
+
+    Object leave(ApiRequest r) throws ApiError, IOException {
+        long guildId = r.longParam("id");
+        LeaveBody body = r.body(LeaveBody.class);
+        GuildData guild = guilds.guild(guildId);
+        if (guild == null) throw ApiError.notFound("The bot isn't in that server.");
+        String typed = body.confirmName == null ? "" : body.confirmName.trim();
+        if (typed.isEmpty()) throw ApiError.invalid("confirmName", "Type the server's name to confirm.");
+        if (!typed.equals(guild.name().trim())) {
+            throw ApiError.invalid("confirmName", "That isn't the server's name. Type it exactly as shown.");
+        }
+        if (body.reason != null && body.reason.trim().length() > ServerSettings.MAX_BLOCK_REASON) {
+            throw ApiError.invalid("reason", "The reason is too long (at most " + ServerSettings.MAX_BLOCK_REASON + " characters).");
+        }
+        boolean block = body.block == null || body.block;
+        ServerSettings.LeaveResult result;
+        try {
+            result = settings.leaveGuild(guildId, body.reason, block, r.userId());
+        } catch (ServerSettings.SettingsException e) {
+            throw new ApiError(502, "leave_failed", e.getMessage());
+        }
+        Map<String, Object> json = new LinkedHashMap<>();
+        json.put("left", true);
+        json.put("name", result.guildName());
+        json.put("blocked", result.blocked());
+        return json;
+    }
+
+    Object blocked(ApiRequest r) {
+        List<Map<String, Object>> list = new ArrayList<>();
+        for (ServerSettings.BlockedServer server : settings.blockedServers()) {
+            Map<String, Object> json = new LinkedHashMap<>();
+            json.put("id", server.guildId());
+            json.put("name", server.name());
+            json.put("blockedAt", server.blockedAt() == 0L ? null : server.blockedAt());
+            json.put("blockedBy", server.blockedBy() == 0L ? null : server.blockedBy());
+            json.put("blockedByName", server.blockedByName());
+            json.put("reason", server.reason());
+            json.put("inServer", inServer(server.guildId()));
+            list.add(json);
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("discordAvailable", guilds.discordAvailable());
+        result.put("blocked", list);
+        return result;
+    }
+
+    /** Whether the bot is still in the server (it should have left), or null if Discord isn't connected. */
+    private Boolean inServer(long guildId) {
+        if (!guilds.discordAvailable()) return null;
+        try {
+            return guilds.guild(guildId) != null;
+        } catch (ApiError e) {
+            return null;
+        }
+    }
+
+    Object unblock(ApiRequest r) throws ApiError {
+        long guildId = r.longParam("id");
+        if (settings.unblock(guildId, r.userId()) == null) throw ApiError.notFound("That server isn't blocked.");
+        return null;
     }
 
     // --- servers ---

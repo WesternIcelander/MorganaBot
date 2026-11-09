@@ -46,6 +46,15 @@ class TwitchStreamerWatcherTest {
     }
 
     @Test
+    void blockedServerNeedsNoSubscriptionsAndIgnoresNotifications() {
+        ServerInfo info = server(true);
+        info.blocked = true;
+        assertEquals(Set.of(), TwitchStreamerWatcher.trackedStreamerIds(info));
+        assertEquals(List.of(), TwitchStreamerWatcher.recordNotification(info, "111", true, 1000L));
+        assertEquals(0L, info.streamers.get(0).startedStreaming);
+    }
+
+    @Test
     void disabledServerIgnoresNotifications() {
         ServerInfo info = server(false);
         assertEquals(List.of(), TwitchStreamerWatcher.recordNotification(info, "111", true, 1000L));

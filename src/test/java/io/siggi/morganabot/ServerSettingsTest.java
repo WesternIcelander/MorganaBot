@@ -158,6 +158,149 @@ class ServerSettingsTest {
         assertTrue(store.get(GUILD).enabledTwitchTracking);
     }
 
+    // --- removing and blocking servers ---
+
+    /** Fake Discord for leaveGuild: records the order of saves and leaves. */
+    private final class FakeGuilds implements ServerSettings.Guilds {
+        final Map<Long, String> names = new HashMap<>();
+        final List<String> events = new ArrayList<>();
+        Exception failure;
+
+        @Override
+        public String name(long guildId) {
+            return names.get(guildId);
+        }
+
+        @Override
+        public void leave(long guildId) throws Exception {
+            // The block must already be on disk when the bot leaves.
+            events.add("leave blocked=" + store.get(guildId).blocked);
+            if (failure != null) throw failure;
+            names.remove(guildId);
+        }
+
+        @Override
+        public String userName(long userId) {
+            return "user" + userId;
+        }
+    }
+
+    private FakeGuilds guilds() {
+        FakeGuilds guilds = new FakeGuilds();
+        guilds.names.put(GUILD, "Main");
+        settings.setGuilds(guilds);
+        settings.setClock(() -> 5000L);
+        return guilds;
+    }
+
+    private java.io.ByteArrayOutputStream captureLog() {
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        settings.setLog(new java.io.PrintStream(out, true, java.nio.charset.StandardCharsets.UTF_8));
+        return out;
+    }
+
+    @Test
+    void leaveGuildSavesBlockFirstThenLeavesAndSyncs() throws Exception {
+        FakeGuilds guilds = guilds();
+        java.io.ByteArrayOutputStream log = captureLog();
+        int auditEntries = auditLog.read(GUILD, true).size();
+        ServerSettings.LeaveResult result = settings.leaveGuild(GUILD, "  breaks the rules ", true, 999L);
+        assertEquals(new ServerSettings.LeaveResult("Main", true), result);
+        assertEquals(List.of("leave blocked=true"), guilds.events);
+        assertEquals(1, twitch.updates);
+        ServerInfo info = store.get(GUILD);
+        assertTrue(info.blocked);
+        assertEquals(5000L, info.blockedAt);
+        assertEquals(999L, info.blockedBy);
+        assertEquals("user999", info.blockedByName);
+        assertEquals("breaks the rules", info.blockedReason);
+        assertEquals("Main", info.blockedName);
+        assertEquals(3, info.streamers.size(), "settings are kept");
+        assertTrue(info.enabledTwitchTracking);
+        String line = log.toString(java.nio.charset.StandardCharsets.UTF_8);
+        assertTrue(line.contains("user999 (999) removed the bot from server \"Main\" (100) and blocked it"), line);
+        assertTrue(line.contains("Reason: breaks the rules"), line);
+        assertEquals(auditEntries, auditLog.read(GUILD, true).size(), "audit entries come with step 17");
+
+        assertTrue(settings.isBlocked(GUILD));
+        assertEquals(List.of(new ServerSettings.BlockedServer(GUILD, "Main", 5000L, 999L, "user999", "breaks the rules")),
+                settings.blockedServers());
+    }
+
+    @Test
+    void leaveGuildWithoutBlock() throws Exception {
+        FakeGuilds guilds = guilds();
+        captureLog();
+        assertEquals(new ServerSettings.LeaveResult("Main", false), settings.leaveGuild(GUILD, "", false, 999L));
+        assertEquals(List.of("leave blocked=false"), guilds.events);
+        assertFalse(store.get(GUILD).blocked);
+        assertEquals(1, twitch.updates);
+        assertTrue(settings.blockedServers().isEmpty());
+    }
+
+    @Test
+    void leaveGuildRefusesWhenNotInServerOrReasonTooLong() {
+        FakeGuilds guilds = guilds();
+        captureLog();
+        assertMessage("The bot isn't in that server (or Discord is unavailable).", () -> settings.leaveGuild(555L, null, true, 999L));
+        assertFalse(store.get(555L).blocked);
+        assertThrows(SettingsException.class, () -> settings.leaveGuild(GUILD, "x".repeat(ServerSettings.MAX_BLOCK_REASON + 1), true, 999L));
+        assertFalse(store.get(GUILD).blocked, "nothing saved");
+        assertTrue(guilds.events.isEmpty());
+        assertEquals(0, twitch.updates);
+    }
+
+    @Test
+    void failedLeaveKeepsTheBlock() {
+        FakeGuilds guilds = guilds();
+        java.io.ByteArrayOutputStream log = captureLog();
+        guilds.failure = new IllegalStateException("timeout");
+        SettingsException e = assertThrows(SettingsException.class, () -> settings.leaveGuild(GUILD, null, true, 999L));
+        assertTrue(e.getMessage().contains("The block is saved"), e.getMessage());
+        assertTrue(store.get(GUILD).blocked);
+        assertEquals(1, twitch.updates, "subscriptions still dropped for the blocked server");
+        assertTrue(log.toString(java.nio.charset.StandardCharsets.UTF_8).contains("leaving failed"));
+    }
+
+    @Test
+    void unblockClearsTheBlockAndKeepsSettings() throws Exception {
+        guilds();
+        java.io.ByteArrayOutputStream log = captureLog();
+        settings.leaveGuild(GUILD, "spam", true, 999L);
+        ServerSettings.BlockedServer lifted = settings.unblock(GUILD, 998L);
+        assertNotNull(lifted);
+        assertEquals("spam", lifted.reason());
+        ServerInfo info = store.get(GUILD);
+        assertFalse(info.blocked);
+        assertEquals(0L, info.blockedAt);
+        assertNull(info.blockedReason);
+        assertNull(info.blockedName);
+        assertEquals(3, info.streamers.size());
+        assertTrue(log.toString(java.nio.charset.StandardCharsets.UTF_8).contains("user998 (998) unblocked server \"Main\" (100)"));
+        assertNull(settings.unblock(GUILD, 998L), "not blocked any more");
+        assertNull(settings.unblock(777L, 998L), "no file");
+        assertFalse(new File(tempDir.toFile(), "777.json").exists(), "unblocking an unknown server writes nothing");
+    }
+
+    @Test
+    void blockedServersScansFilesIncludingHandEdits() throws Exception {
+        // Hand-written files the store hasn't seen yet, an unreadable one, and other per-server files.
+        java.nio.file.Files.writeString(tempDir.resolve("300.json"), "{\"blocked\": true, \"blockedAt\": 10, \"blockedName\": \"Old\"}");
+        java.nio.file.Files.writeString(tempDir.resolve("400.json"), "{\"blocked\": true, \"blockedAt\": 20}");
+        java.nio.file.Files.writeString(tempDir.resolve("500.json"), "{\"blocked\": false}");
+        java.nio.file.Files.writeString(tempDir.resolve("600.json"), "{not json");
+        java.nio.file.Files.writeString(tempDir.resolve("300-audit.jsonl"), "");
+        java.nio.file.Files.writeString(tempDir.resolve("300.json.bak"), "{\"blocked\": true}");
+        List<ServerSettings.BlockedServer> blocked = settings.blockedServers();
+        assertEquals(List.of(400L, 300L), blocked.stream().map(ServerSettings.BlockedServer::guildId).toList(), "newest first");
+        assertEquals("Old", blocked.get(1).name());
+        assertTrue(settings.isBlocked(300L));
+        assertFalse(settings.isBlocked(500L));
+        assertFalse(settings.isBlocked(600L), "an unreadable file never makes the bot leave");
+        assertFalse(settings.isBlocked(GUILD));
+        assertEquals(List.of(100L, 300L, 400L, 500L, 600L), store.guildIds());
+    }
+
     // --- addStreamer ---
 
     @Test

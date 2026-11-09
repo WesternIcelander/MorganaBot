@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { AdminGuild } from "../ts/api.js";
-import { detailText, filterGuilds, guildSummary, logQuery, relative, stateClass, stateLabel, uptimeText } from "../ts/super-text.js";
+import type { AdminGuild, BlockedServer } from "../ts/api.js";
+import { blockedByText, blockedName, confirmNameMatches, detailText, filterGuilds, guildSummary, logQuery, relative, stateClass, stateLabel, uptimeText } from "../ts/super-text.js";
 
 const guild = (id: string, name: string, twitchEnabled: boolean, problems: number, extra: Partial<AdminGuild> = {}): AdminGuild =>
     ({ id, name, iconUrl: null, memberCount: 10, twitchEnabled, streamers: 2, problems, ...extra });
@@ -62,4 +62,23 @@ test("system log query", () => {
     assert.equal(logQuery("", "", null), "");
     assert.equal(logQuery("TWITCH_API", "", null), "?component=TWITCH_API");
     assert.equal(logQuery("", "ERROR", "1700000000000"), "?severity=ERROR&before=1700000000000");
+});
+
+test("remove confirmation needs the exact name", () => {
+    assert.equal(confirmNameMatches("Main", "Main"), true);
+    assert.equal(confirmNameMatches("  Main ", "Main"), true, "spaces at the ends are ignored");
+    assert.equal(confirmNameMatches("main", "Main"), false, "case matters");
+    assert.equal(confirmNameMatches("Mai", "Main"), false);
+    assert.equal(confirmNameMatches("", ""), false, "never matches an empty name");
+    assert.equal(confirmNameMatches("   ", "   "), false);
+});
+
+test("blocked server labels", () => {
+    const server = (extra: Partial<BlockedServer>): BlockedServer =>
+        ({ id: "1", name: "Bad", blockedAt: "5", blockedBy: "9", blockedByName: "siggi", reason: null, inServer: false, ...extra });
+    assert.equal(blockedName(server({})), "Bad");
+    assert.equal(blockedName(server({ name: null })), "Unknown server");
+    assert.equal(blockedByText(server({})), "siggi (9)");
+    assert.equal(blockedByText(server({ blockedByName: null })), "User 9");
+    assert.equal(blockedByText(server({ blockedBy: null })), "unknown");
 });

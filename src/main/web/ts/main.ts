@@ -1,6 +1,6 @@
 // The dashboard shell: who's logged in (GET /me), the server dropdown, the page tabs, logout, and the
-// "run /dashboard again" notice when the session has expired. Super admin sessions get the sidebar (System page and
-// server switcher) instead of the dropdown.
+// "run /dashboard again" notice when the session has expired. Super admin sessions get the sidebar (System page,
+// Blocked servers and server switcher) instead of the dropdown.
 
 import type { AdminGuild, GuildSummary, Me } from "./api.js";
 import { busy, errorMessage, h, replace } from "./dom.js";
@@ -12,6 +12,7 @@ import { streamersPage } from "./streamers.js";
 import { streamPage } from "./stream.js";
 import { Sidebar } from "./sidebar.js";
 import { renderSystemPage } from "./system.js";
+import { renderBlockedPage } from "./blocked.js";
 
 /** Every page, in tab order. A server opens on the first page it offers (admins: Settings, streamers: My stream). */
 const PAGES: Page[] = [settingsPage, streamersPage, auditPage, streamPage];
@@ -28,8 +29,11 @@ let me: Me | null = null;
 let current: GuildSummary | null = null;
 /** The page from the URL or the tabs; null for the server's default page. */
 let currentPage: string | null = null;
-/** "system" while the super admin System page is open (no server selected). */
-let view: "system" | null = null;
+/** A super admin page that isn't about one server (no server selected), or null. */
+type View = "system" | "blocked";
+let view: View | null = null;
+
+const VIEW_TITLES: Record<View, string> = { system: "System", blocked: "Blocked servers" };
 let sidebar: Sidebar | null = null;
 /** Bumped on every navigation, so a slow page load can't draw over a newer one. */
 let generation = 0;
@@ -79,14 +83,15 @@ function pageFromUrl(): string | null {
     return new URLSearchParams(window.location.search).get("page");
 }
 
-function viewFromUrl(): "system" | null {
-    return new URLSearchParams(window.location.search).get("view") === "system" ? "system" : null;
+function viewFromUrl(): View | null {
+    const value = new URLSearchParams(window.location.search).get("view");
+    return value === "system" || value === "blocked" ? value : null;
 }
 
 function writeUrl(push: boolean): void {
     const params = new URLSearchParams();
-    if (view === "system") {
-        params.set("view", "system");
+    if (view !== null) {
+        params.set("view", view);
     } else {
         if (current !== null) params.set("guild", current.id);
         if (currentPage !== null && currentPage !== defaultPage(current)) params.set("page", currentPage);
@@ -129,7 +134,7 @@ function drawServerPicker(user: Me): void {
     if (user.superAdmin) {
         // The sidebar is the switcher; the header only names what's open.
         const name = current === null ? null : sidebar?.guild(current.id)?.name ?? current.name;
-        replace(picker, view === "system" ? h("span", { class: "server-name" }, "System")
+        replace(picker, view !== null ? h("span", { class: "server-name" }, VIEW_TITLES[view])
             : name !== null ? h("span", { class: "server-name" }, name) : null);
         return;
     }
@@ -175,8 +180,8 @@ function drawNav(guild: GuildSummary): void {
 
 async function openPage(): Promise<void> {
     if (me === null) return;
-    if (view === "system") {
-        await openSystem();
+    if (view !== null) {
+        await openView(view);
         return;
     }
     if (current === null) return;
@@ -194,7 +199,9 @@ async function openPage(): Promise<void> {
     const run = ++generation;
     const root = h("div", { class: "page" }, h("p", { class: "loading" }, "Loading…"));
     replace(content(), root);
-    const context: PageContext = { me, guild, accessChanged: reloadMe, serverChanged: () => void sidebar?.loadGuilds() };
+    const context: PageContext = {
+        me, guild, accessChanged: reloadMe, serverChanged: () => void sidebar?.loadGuilds(), serverRemoved,
+    };
     try {
         await page.render(root, context);
     } catch (error) {
@@ -212,25 +219,49 @@ async function openPage(): Promise<void> {
     }
 }
 
-/** The super admin System page. */
-async function openSystem(): Promise<void> {
+/** A super admin page that isn't about one server: System or Blocked servers. */
+async function openView(which: View): Promise<void> {
     if (me === null) return;
-    view = "system";
-    sidebar?.select({ kind: "system" });
+    view = which;
+    sidebar?.select({ kind: which });
     drawServerPicker(me);
     replace(nav());
     const run = ++generation;
     const root = h("div", { class: "page" }, h("p", { class: "loading" }, "Loading…"));
     replace(content(), root);
     try {
-        await renderSystemPage(root, (status) => sidebar?.setStatus(status));
+        if (which === "system") await renderSystemPage(root, (status) => sidebar?.setStatus(status));
+        else await renderBlockedPage(root);
     } catch (error) {
         if (run !== generation) return;
         if (error instanceof ApiFailure && error.sessionExpired) return;
         const retry = h("button", { type: "button" }, "Try again");
-        retry.addEventListener("click", () => void openSystem());
+        retry.addEventListener("click", () => void openView(which));
         replace(root, h("div", { class: "notice error" }, h("p", null, errorMessage(error)), retry));
     }
+}
+
+/** Opens a super admin page from the sidebar. */
+function goToView(which: View): void {
+    view = which;
+    writeUrl(true);
+    void openView(which);
+}
+
+/**
+ * The bot was removed from the open server: it can't be opened any more. The removal message stays up for a moment,
+ * then the shell moves to Blocked servers (or System) and reloads the lists.
+ */
+function serverRemoved(blocked: boolean): void {
+    const removedId = current?.id;
+    void sidebar?.loadGuilds();
+    window.setTimeout(() => {
+        if (me === null || current?.id !== removedId || view !== null) return; // moved on already
+        me = { ...me, guilds: me.guilds.filter((g) => g.id !== removedId) };
+        current = null;
+        currentPage = null;
+        goToView(blocked ? "blocked" : "system");
+    }, 2500);
 }
 
 /** A server picked in the sidebar. Super admins can open every server, even one /me didn't list yet. */
@@ -251,11 +282,8 @@ function setUpSidebar(user: Me): void {
     }
     if (sidebar === null) {
         sidebar = new Sidebar(el("sidebar"), {
-            openSystem: () => {
-                view = "system";
-                writeUrl(true);
-                void openSystem();
-            },
+            openSystem: () => goToView("system"),
+            openBlocked: () => goToView("blocked"),
             openGuild: openFromSidebar,
         });
     }
@@ -293,7 +321,7 @@ async function reloadMe(): Promise<void> {
     } else {
         banner().hidden = true;
     }
-    if (!user.superAdmin && view === "system") view = null;
+    if (!user.superAdmin) view = null;
     const wanted = current?.id ?? guildFromUrl();
     current = user.guilds.find((g) => g.id === wanted) ?? null;
     if (user.superAdmin) {
@@ -303,7 +331,7 @@ async function reloadMe(): Promise<void> {
         }
         if (current === null && view === null) current = user.guilds[0] ?? null;
         // Super admins land on the System page when there's no server to show, e.g. while Discord is down.
-        if (current === null || !user.discordAvailable) view = "system";
+        if (view === null && (current === null || !user.discordAvailable)) view = "system";
         writeUrl(false);
         await openPage();
         return;
@@ -327,7 +355,7 @@ function start(): void {
     window.addEventListener("popstate", () => {
         if (me === null) return;
         view = me.superAdmin ? viewFromUrl() : null;
-        if (view === "system") {
+        if (view !== null) {
             void openPage();
             return;
         }

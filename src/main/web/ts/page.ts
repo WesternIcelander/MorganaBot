@@ -12,6 +12,11 @@ export interface PageContext {
     accessChanged(): Promise<void>;
     /** Call after a change the super admin server list shows (e.g. Twitch on/off), so it's reloaded. */
     serverChanged(): void;
+    /**
+     * Call after the bot was removed from this server (super admins): the server can't be opened any more, so the
+     * shell moves on (to Blocked servers if it was blocked).
+     */
+    serverRemoved(blocked: boolean): void;
 }
 
 export interface Page {

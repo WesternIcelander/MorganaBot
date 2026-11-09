@@ -104,6 +104,7 @@ public class MorganaBot {
     private Diagnose diagnose;
     private LoginTokenStore loginTokens;
     private DashboardCommand dashboardCommand;
+    private BlockedGuildListener blockedGuildListener;
     private RecoveryLogin recoveryLogin;
     private ScheduledExecutorService recoveryChecker;
     /** Set when connecting to Discord failed (cleared once it's ready), for the recovery login link. */
@@ -216,6 +217,35 @@ public class MorganaBot {
         }
     }
 
+    /**
+     * Leaving and naming servers for {@link ServerSettings#leaveGuild}, from JDA.
+     */
+    private final class JdaGuilds implements ServerSettings.Guilds {
+        @Override
+        public String name(long guildId) {
+            Guild guild = connectedGuild(guildId);
+            return guild == null ? null : guild.getName();
+        }
+
+        @Override
+        public void leave(long guildId) throws Exception {
+            Guild guild = connectedGuild(guildId);
+            if (guild == null) throw new IllegalStateException("The bot isn't in that server, or Discord is unavailable.");
+            guild.leave().complete();
+        }
+
+        @Override
+        public String userName(long userId) {
+            return new DiscordNames().user(0L, userId);
+        }
+
+        private Guild connectedGuild(long guildId) {
+            JDA current = jda;
+            if (current == null || current.getStatus() != JDA.Status.CONNECTED) return null;
+            return current.getGuildById(guildId);
+        }
+    }
+
     public UserData getUserData(long userId) {
         return Data.read(new File(Util.getDataRoot(), "users/" + userId + ".json"), UserData.class, gson);
     }
@@ -260,6 +290,8 @@ public class MorganaBot {
         }, auditLog);
         serverSettings.setMembers(SelfServiceListener.members(this::getJDA));
         serverSettings.setAccess(new Access(serverInfoStore, configuration.superAdmins));
+        serverSettings.setGuilds(new JdaGuilds());
+        blockedGuildListener = new BlockedGuildListener(serverSettings::isBlocked, System.out);
         diagnose = new Diagnose(this);
         loginTokens = new LoginTokenStore();
         loginTokens.start();
@@ -328,7 +360,8 @@ public class MorganaBot {
                         .enableIntents(GatewayIntent.GUILD_MEMBERS)
                         .setMemberCachePolicy(MemberCachePolicy.ALL)
                         .setChunkingFilter(ChunkingFilter.ALL)
-                        .addEventListeners(discordHealthListener, new Listener(this), new SelfServiceListener(this))
+                        .addEventListeners(discordHealthListener, new Listener(this), new SelfServiceListener(this),
+                                blockedGuildListener)
                         .build();
                 attempt.awaitReady();
                 if (stopping) {
@@ -336,6 +369,8 @@ public class MorganaBot {
                     return;
                 }
                 jda = attempt;
+                // Blocked servers the bot is still in (e.g. blocked while a leave failed, or by hand-editing).
+                blockedGuildListener.sweep(attempt);
                 registerCommands(attempt);
                 discordFailed = false;
                 discordReady.countDown();

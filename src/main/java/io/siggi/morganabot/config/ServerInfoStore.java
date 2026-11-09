@@ -9,11 +9,15 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Function;
 import java.util.function.Supplier;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Keeps one cached {@link ServerInfo} per guild ({@code <dir>/<guildId>.json}), with a lock per guild.
@@ -116,6 +120,29 @@ public class ServerInfoStore {
             entry.lock.unlock();
         }
     }
+
+    /**
+     * The IDs of every guild that has a settings file ({@code <dir>/<guildId>.json}), whether or not the bot is in it.
+     * Other files in the directory (audit logs, problem lists, backups) are left out.
+     */
+    public List<Long> guildIds() {
+        List<Long> ids = new ArrayList<>();
+        File[] files = directory.listFiles();
+        if (files == null) return ids;
+        for (File file : files) {
+            Matcher matcher = GUILD_FILE.matcher(file.getName());
+            if (!matcher.matches() || !file.isFile()) continue;
+            try {
+                ids.add(Long.parseLong(matcher.group(1)));
+            } catch (NumberFormatException ignored) {
+                // Too long to be a snowflake.
+            }
+        }
+        ids.sort(null);
+        return ids;
+    }
+
+    private static final Pattern GUILD_FILE = Pattern.compile("([0-9]{1,19})\\.json");
 
     /**
      * Makes an independent deep copy of {@code info}, bound to the same file.
