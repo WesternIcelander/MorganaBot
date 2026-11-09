@@ -39,7 +39,7 @@ Access is decided by the bot on **every request**, from the member's current rol
 - **Everyone else** gets "You don't have access to this server's dashboard".
 - **Super admin** is unchanged: full access everywhere.
 - **Access changes take effect straight away,** because the check runs on every request. Removing an admin role cuts that person off immediately; they don't keep access until their session expires.
-- **Who can edit the admin role list:** only members with Discord's **Administrator** permission (user's decision; the server owner always has it). Someone who's an admin only through a MorganaBot admin role can't change the list, so they can't add more admins (e.g. `@everyone`) or remove other admins. The setting is in the dashboard and in commands (`/addadminrole`, `/removeadminrole`, which are Administrator-only by default and also checked by the bot).
+- **Who can edit the admin role list:** only members with Discord's **Administrator** permission (the server owner always has it), plus super admins, who can do anything (user's decision). Someone who's an admin only through a MorganaBot admin role can't change the list, so they can't add more admins (e.g. `@everyone`) or remove other admins. The setting is in the dashboard and in commands (`/addadminrole`, `/removeadminrole`, which are Administrator-only by default and also checked by the bot).
 - **The existing admin commands keep their Discord-side defaults** (admin only, adjustable under Integrations), so production servers behave exactly as before. People who are admins only through a MorganaBot admin role use the dashboard, unless the server grants them the commands under Integrations.
 
 ### Message customization permissions
@@ -65,7 +65,7 @@ Admins choose which non-admin streamers can write their own live message, and wh
   2. **`allowed_mentions` = the mentions written in the template text**, found before Twitch values are filled in. Role and user mentions can only ping if the template contains them.
   
   Both layers are needed. Discord's `@everyone` switch covers the whole message, so a template that legitimately contains `@everyone` would otherwise also let an `@everyone` in the stream title ping. This fixes the existing hole where a stream title containing `@everyone` pings everyone if the bot has Mention Everyone.
-- **Pinging individual users** (`<@id>`) is also checked at save time. A non-admin's template can't add user mentions, so they can't use it for harassment pings. As with other mentions, ones already in the previously saved message can be kept. `${discord_name}` (the streamer themself) is always allowed. It isn't configurable for now.
+- **Pinging individual users** (`<@id>`): only admins can add them (user's decision). It's also checked at save time: a non-admin's template can't add user mentions, so they can't use it for harassment pings. As with other mentions, ones already in the previously saved message can be kept. `${discord_name}` (the streamer themself) is always allowed. It isn't configurable for now.
 - **Existing per-streamer templates on production** ping exactly as before, since posting doesn't check permissions. The only change is that mentions coming from Twitch data no longer ping.
 - If a streamer loses every customization rule, their template is kept and still used, mentions included. They just can't edit it any more; admins still can.
 
@@ -223,7 +223,13 @@ Every file under `data/` must keep loading after a deploy, with nothing lost and
   - Super admin sessions are cut off after 8 hours, by checking the stored login time on each request.
   - SiggiHTTP's cookie is `HttpOnly`, plus `Secure` when the proxy sends `X-Forwarded-Proto: https`. It has no `SameSite`, so the CSRF check below is the real protection against cross-site requests and is required on every write.
 - **CSRF:** any request that changes something must be JSON and carry a custom header (`X-Morgana-CSRF` holding a per-session token).
-- **Frontend:** plain HTML, CSS and JS served from `src/main/resources/web/`, with no build step and no npm. Everything it displays from users or Twitch is inserted as text, never as HTML.
+- **Frontend: HTML, CSS and TypeScript** (user's decision).
+  - **Sources:** `src/main/web/`, containing `index.html`, CSS, `ts/*.ts`, `package.json` and `tsconfig.json`.
+  - **Dependencies:** `typescript` is the only npm dependency, as a dev dependency. There's no framework and no bundler.
+  - **Compiling:** `tsc` turns each `.ts` file into an ES module, loaded by the page with `<script type="module">`.
+  - **Built by Maven:** `frontend-maven-plugin` downloads a pinned Node into `target/`, then runs `npm ci` and `npm run build`. The output goes to `target/classes/web/`, so it ends up in the jar and `mvn package` stays the only build command. The first build needs network access to download Node and npm packages.
+  - **Strict typing:** `tsconfig.json` uses `strict: true`, and the API response types live in one `api.ts` that mirrors the Java JSON.
+  - **Safety:** everything displayed from users or Twitch is inserted as text (`textContent`), never as HTML.
 - **Choosing users, channels and roles:** channels and roles come from the JDA cache. To pick a Discord user, the UI searches the member cache by name (step 7 turns on the members intent and caches all members). Pasting a user ID also works.
 
 ### Steps (each finished step = commit on main, then tick here with the hash)
@@ -257,7 +263,7 @@ Every file under `data/` must keep loading after a deploy, with nothing lost and
     - **Token refresh:** keep the old token until the new one is in place, refresh under a lock from any thread (not only the loop thread), refresh early when `twitchAppAccessTokenExpiry` is near, and make the `AuthCache` access thread-safe. This also fixes the expired-token bug.
     - **Online/offline ordering:** handle each streamer's notifications one at a time (a per-Twitch-ID lock), run the cooldown check inside it, and have offline wait for an in-flight send so it can delete the new post.
     - **`triggerUpdate()` after `stop()`:** keep the thread reference, and make `triggerUpdate()` do nothing once stopped.
-  - **Alerting:** DM super admins when a component turns red or recovers, rate-limited, with stdout as the fallback.
+  - **Alerting (confirmed by the user):** DM super admins when a component turns red or recovers, rate-limited, with stdout as the fallback.
   - **Recovery login:** print a single-use super admin login link to stdout (15 minutes) when Discord fails, and hourly while it stays down. This needs the login token store from step 9, so the stdout link is wired up in that step.
 - [ ] 6. **Diagnose: check every streamer's setup without waiting for a stream.** Add `Diagnose.run(guild)`, which works out what *would* happen on each streamer's next go-live and reports anything that would fail. It doesn't post or change anything, and doesn't store results. It runs:
   - on demand from the **Diagnose** button
@@ -314,7 +320,7 @@ Every file under `data/` must keep loading after a deploy, with nothing lost and
     - `canCustomizeMessage(member)`
     - `allowedMentions(member)`, the combination of all their matching rules
   - **`ServerSettings`:**
-    - setters for admin roles (Discord Administrator only) and for customization rules, each audited
+    - setters for admin roles (Discord Administrator or super admin only) and for customization rules, each audited
     - `setOwnTemplate(member, text)`: allows a mention if it's allowed by the member's current rules or present in the previously saved message (own template, or else the server-wide one). The same applies to user mentions (except the streamer themself). It also checks the length limit and records `templateSetBy`. Admin saves aren't mention-checked.
   - **Posting:** build the message with explicit `allowed_mentions`:
     - ping = exactly the mentions written in the template text (no permission check at post time)
@@ -329,7 +335,7 @@ Every file under `data/` must keep loading after a deploy, with nothing lost and
 - [ ] 11. **JSON API for streamers and server admins** under `/dashboard/api/guilds/{guildId}/…`:
   - `GET /dashboard/api/me`: who is logged in, whether they're a super admin, and the servers they can open, each with their access level (`admin` or `streamer`)
   - Streamer (own entry): `GET …/me/streamer` (their entry, status and channel, what they may customize, and which mentions they're allowed), `PUT …/me/streamer/template`, `PUT …/me/streamer/twitch` and `DELETE …/me/streamer` (self-service set and remove, same rules as the commands).
-  - Admin: `GET`/`PUT …/admin-roles` (`PUT` needs Discord Administrator), and `GET`/`PUT …/message-rules`.
+  - Admin: `GET`/`PUT …/admin-roles` (`PUT` needs Discord Administrator or super admin), and `GET`/`PUT …/message-rules`.
   - `GET …/settings`, `PATCH …/settings`
   - `GET …/channels` (text channels only), `GET …/roles` (marking roles the bot can't assign because they're above its own role)
   - `GET …/members?q=`
@@ -340,11 +346,17 @@ Every file under `data/` must keep loading after a deploy, with nothing lost and
   - `GET …/problems`: recorded failures (step 4), the latest Diagnose results (step 6), and a one-line "Twitch is having problems, posts may be delayed" flag when the system's Twitch status is red (no details, which are for super admins). `DELETE …/problems/{id}` and `DELETE …/problems` dismiss entries.
   - Super admin endpoints are added in steps 14, 16 and 17, next to their backends.
   - Every channel ID and role ID sent in is checked to belong to that guild.
-- [ ] 12. **Frontend: shell and the streamer page.** Static files in `src/main/resources/web/`.
+- [ ] 12. **Frontend: shell and the streamer page.** Set up the TypeScript build first (see Design decisions → Frontend):
+  - `src/main/web/` with `package.json` (pinned `typescript`, and a `package-lock.json` committed), and `tsconfig.json` (`strict`, ES module output to `target/classes/web/`)
+  - `frontend-maven-plugin` in `pom.xml`, with a pinned Node version
+  - `node_modules/` and the downloaded Node added to `.gitignore`
+  - the web server serving `/dashboard/` from `web/` on the classpath
+  
+  `mvn package` must build the frontend too.
   - **Shared shell:** loads `GET /dashboard/api/me`, has a server dropdown when the user can open more than one server, a fetch helper that sends the CSRF header and shows "run /dashboard again" when the session has expired, error display next to the field it belongs to, and escaping (everything is inserted as text).
   - **"My stream" page** for streamer-level access: status, Twitch channel set/remove, and the message editor. The editor lists the variables, shows a live preview, and only offers the mentions they're allowed; disallowed ones are greyed out with the reason.
 - [ ] 13. **Frontend: server admin pages.**
-  - **Access** section: admin roles, editable only by Discord Administrators; for everyone else it's read-only with an explanation.
+  - **Access** section: admin roles, editable only by Discord Administrators and super admins; for everyone else it's read-only with an explanation.
   - **Message permissions:** rules per role, with an allow `@everyone`/`@here` toggle and a multi-select of allowed role mentions.
   - **Settings form.**
   - **Streamer table** with add, edit and delete. It has "self-added", "paused since …" and "pinned" badges, and a "Go back to role-based" button.

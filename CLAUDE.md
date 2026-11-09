@@ -5,6 +5,7 @@ Discord bot (Java 17, Maven, JDA 6) that posts in Discord channels when Twitch s
 ## Build
 
 - `mvn package` → `target/MorganaBot.jar` (shaded). `mvn -q -o compile` for a quick check.
+- Once PLAN step 12 lands, the dashboard frontend is TypeScript in `src/main/web/`. `mvn package` builds it through `frontend-maven-plugin` (pinned Node in `target/`, `npm ci`, `tsc`), so the first build needs network access. Don't add frameworks or bundlers without asking.
 - No tests exist.
 - The Discord token in `data/config.json` belongs to a **developer** bot account, not the production bot. It's safe to run the bot locally with it for testing.
 
