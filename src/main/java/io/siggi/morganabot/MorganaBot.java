@@ -3,6 +3,7 @@ package io.siggi.morganabot;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import io.siggi.morganabot.audit.AuditLog;
+import io.siggi.morganabot.diagnose.Diagnose;
 import io.siggi.morganabot.config.AuthCache;
 import io.siggi.morganabot.config.Configuration;
 import io.siggi.morganabot.config.Data;
@@ -89,6 +90,7 @@ public class MorganaBot {
     private ServerSettings serverSettings;
     private AuditLog auditLog;
     private ServerProblems serverProblems;
+    private Diagnose diagnose;
 
     public Gson getGson() {
         return gson;
@@ -120,6 +122,10 @@ public class MorganaBot {
 
     public SystemHealth getSystemHealth() {
         return systemHealth;
+    }
+
+    public Diagnose getDiagnose() {
+        return diagnose;
     }
 
     /**
@@ -217,6 +223,7 @@ public class MorganaBot {
                 if (watcher != null) watcher.triggerUpdate();
             }
         }, auditLog);
+        diagnose = new Diagnose(this);
         // The web server and the Twitch watcher don't need Discord to start, and the system status must stay
         // reachable when Discord is down. The watcher's guild loops wait for Discord themselves.
         webHandler = new WebHandler(this);

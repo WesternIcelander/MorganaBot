@@ -16,6 +16,7 @@ import io.siggi.morganabot.problems.FailureReasons;
 import io.siggi.morganabot.problems.Problem;
 import io.siggi.morganabot.problems.ServerProblems;
 import io.siggi.morganabot.twitch.StreamerQueue;
+import io.siggi.morganabot.twitch.SubscriptionNotes;
 import io.siggi.morganabot.twitch.TwitchErrors;
 import io.siggi.morganabot.twitch.TwitchHttpException;
 import io.siggi.morganabot.twitch.TwitchTokenManager;
@@ -86,6 +87,14 @@ public class TwitchStreamerWatcher {
     private final AtomicLong signatureFailures = new AtomicLong();
     /** Set while Twitch rejects the client ID/secret; keeps the card from turning green on other successes. */
     private volatile String credentialsProblem;
+    private final SubscriptionNotes subscriptionNotes = new SubscriptionNotes();
+
+    /**
+     * EventSub trouble per streamer (disabled by Twitch, or couldn't be created), for Diagnose.
+     */
+    public SubscriptionNotes getSubscriptionNotes() {
+        return subscriptionNotes;
+    }
 
     public void start() {
         if (started) return;
@@ -312,6 +321,7 @@ public class TwitchStreamerWatcher {
                 String broadcaster = subscription.getAsJsonObject("condition").get("broadcaster_user_id").getAsString();
                 health.log(Component.EVENTSUB, Severity.WARNING, "Twitch revoked the " + eventType
                         + " subscription for broadcaster " + broadcaster + " (" + status + ")", null);
+                subscriptionNotes.disabled(broadcaster, eventType, status, System.currentTimeMillis());
                 triggerUpdate();
                 return;
             }
@@ -492,19 +502,9 @@ public class TwitchStreamerWatcher {
                     recordProblem(guildId, new Problem(Problem.SEND_LIVE_MESSAGE, channelTarget, streamerTarget, "Not posted: " + channelProblem));
                     return;
                 }
-                String liveMessage = streamer.liveNotificationTemplate;
-                if (liveMessage == null) liveMessage = serverInfo.liveNotificationTemplate;
-                if (liveMessage == null) liveMessage = "${streamer_name} has gone live on Twitch, playing ${game_name}! Check 'em out!\n${twitch_link}";
-                String gameName = Util.markdownEscape(channelInfo.get("game_name").getAsString());
-                String streamName = Util.markdownEscape(channelInfo.get("title").getAsString());
-                String streamerNameEscaped = Util.markdownEscape(streamerName);
-                String discordMention = streamer.discordId == 0L ? "?" : ("<@" + streamer.discordId + ">");
-                liveMessage = liveMessage
-                        .replace("${game_name}", gameName)
-                        .replace("${stream_name}", streamName)
-                        .replace("${streamer_name}", streamerNameEscaped)
-                        .replace("${twitch_link}", "https://www.twitch.tv/" + streamerName)
-                        .replace("${discord_name}", discordMention);
+                String liveMessage = LiveMessage.fill(LiveMessage.templateFor(serverInfo, streamer),
+                        channelInfo.get("game_name").getAsString(), channelInfo.get("title").getAsString(),
+                        streamerName, streamer.discordId);
                 String finalChannelName = channelName;
                 // A later notification for this streamer (e.g. offline) waits until this send and the save of its
                 // message ID are done, so it can delete the new post.
@@ -728,6 +728,7 @@ public class TwitchStreamerWatcher {
                     info.put("broadcasterId", streamerId);
                     info.put("status", status);
                     disabled.add(info);
+                    subscriptionNotes.disabled(streamerId, type, status, System.currentTimeMillis());
                     health.log(Component.EVENTSUB, Severity.WARNING, "Twitch disabled the " + type
                             + " subscription for broadcaster " + streamerId + " (" + status + "); deleting it", null);
                     subscriptionsToDelete.add(id);
@@ -752,6 +753,7 @@ public class TwitchStreamerWatcher {
             }
         }
         int failures = 0;
+        Map<String, List<SubscriptionNotes.Note>> createFailures = new HashMap<>();
         for (String id : subscriptionsToDelete) {
             try {
                 deleteSubscription(id);
@@ -778,13 +780,18 @@ public class TwitchStreamerWatcher {
                     failures++;
                     health.log(Component.EVENTSUB, Severity.ERROR, "Could not create the " + type
                             + " subscription for broadcaster " + streamerId + ": " + e.getMessage(), null);
+                    createFailures.computeIfAbsent(streamerId, k -> new ArrayList<>()).add(new SubscriptionNotes.Note(
+                            SubscriptionNotes.Kind.CREATE_FAILED, type, e.getMessage(), System.currentTimeMillis()));
                 } catch (IOException e) {
                     failures++;
                     health.log(Component.EVENTSUB, Severity.ERROR, "Could not create the " + type
                             + " subscription for broadcaster " + streamerId + ": " + Health.describe(e), null);
+                    createFailures.computeIfAbsent(streamerId, k -> new ArrayList<>()).add(new SubscriptionNotes.Note(
+                            SubscriptionNotes.Kind.CREATE_FAILED, type, Health.describe(e), System.currentTimeMillis()));
                 }
             }
         }
+        subscriptionNotes.syncFinished(createFailures);
         health.detail(Component.EVENTSUB, "subscriptionCount", active);
         health.detail(Component.EVENTSUB, "disabledSubscriptions", disabled);
         health.detail(Component.EVENTSUB, "lastSync", System.currentTimeMillis());

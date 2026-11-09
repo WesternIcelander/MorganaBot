@@ -5,6 +5,9 @@ import io.siggi.morganabot.ServerSettings.SettingsException;
 import io.siggi.morganabot.ServerSettings.StreamerRef;
 import io.siggi.morganabot.audit.Actor;
 import io.siggi.morganabot.config.ServerInfo;
+import io.siggi.morganabot.diagnose.Check;
+import io.siggi.morganabot.diagnose.Diagnose;
+import io.siggi.morganabot.diagnose.JdaGuildView;
 import io.siggi.morganabot.health.Health;
 import io.siggi.morganabot.util.Util;
 import net.dv8tion.jda.api.entities.User;
@@ -56,7 +59,8 @@ public class TwitchCommandHandler {
             return "Added " + Util.markdownEscape(user.displayName())
                     + (discordUserId != 0L ? " / <@" + discordUserId + ">" : "")
                     + " as a Twitch streamer"
-                    + (channelId != 0L ? " in <#" + channelId + ">" : "");
+                    + (channelId != 0L ? " in <#" + channelId + ">" : "")
+                    + (channelId != 0L ? channelWarnings(event, channelId, "pick another channel for this streamer") : "");
         });
     }
 
@@ -76,7 +80,8 @@ public class TwitchCommandHandler {
             if (channelId == 0L) {
                 return "Removed override for " + describe(streamer, event);
             } else {
-                return "Set override for " + describe(streamer, event) + " to <#" + channelId + ">";
+                return "Set override for " + describe(streamer, event) + " to <#" + channelId + ">"
+                        + channelWarnings(event, channelId, "pick another channel for this streamer");
             }
         });
     }
@@ -86,7 +91,11 @@ public class TwitchCommandHandler {
             OptionMapping roleMapping = event.getOption("role");
             long roleId = roleMapping == null ? 0L : roleMapping.getAsRole().getIdLong();
             bot.getServerSettings().setLiveRole(actor(event), event.getGuild().getIdLong(), roleId);
-            return "Streamer role was set to <@&" + roleId + ">";
+            if (roleId == 0L) {
+                return "Streamer role was removed";
+            }
+            return "Streamer role was set to <@&" + roleId + ">"
+                    + warnings(Diagnose.liveRoleChecks(new JdaGuildView(event.getGuild()), roleId));
         });
     }
 
@@ -94,7 +103,11 @@ public class TwitchCommandHandler {
         handle(event, () -> {
             long channelId = getChannelId(event, "channel");
             bot.getServerSettings().setLiveChannel(actor(event), event.getGuild().getIdLong(), channelId);
-            return "Live channel was set to <#" + channelId + ">";
+            if (channelId == 0L) {
+                return "Live channel was removed";
+            }
+            return "Live channel was set to <#" + channelId + ">"
+                    + channelWarnings(event, channelId, "pick another live channel");
         });
     }
 
@@ -189,6 +202,30 @@ public class TwitchCommandHandler {
             if (streamer.channelToPostLiveNotifications != 0L) {
                 sb.append("  - Posts in: <#").append(streamer.channelToPostLiveNotifications).append(">\n");
             }
+        }
+        return sb.toString();
+    }
+
+    // --- Diagnose after a save ---
+
+    /**
+     * Problems with posting in the channel that was just picked, so they're flagged straight away. Uses the JDA
+     * cache only.
+     */
+    private static String channelWarnings(SlashCommandInteractionEvent event, long channelId, String changeFix) {
+        return warnings(Diagnose.channelChecks(new JdaGuildView(event.getGuild()), channelId, "channel", changeFix));
+    }
+
+    /**
+     * The warnings and errors among {@code checks}, one per line after a blank line, or "" if there are none.
+     */
+    static String warnings(List<Check> checks) {
+        StringBuilder sb = new StringBuilder();
+        for (Check check : checks) {
+            if (check.level == Check.Level.OK) continue;
+            sb.append(sb.length() == 0 ? "\n\n" : "\n");
+            sb.append(check.level == Check.Level.ERROR ? "**Error:** " : "**Warning:** ").append(check.message);
+            if (check.fix != null) sb.append(" ").append(check.fix);
         }
         return sb.toString();
     }
