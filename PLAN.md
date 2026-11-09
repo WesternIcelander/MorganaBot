@@ -50,7 +50,11 @@ Streamers can add themselves with `/settwitchchannel twitch-name:<name>`, as lon
   - **Losing eligibility pauses posts.** That means losing the last self-service role, leaving the server, or an admin removing that role from the self-service list. The bot records `selfServiceLostAt` and stops posting for them (no live post, no live role). It's shown as "Paused: no self-service role since <date>" in the streamer table, with an audit entry from "system".
   - **Getting a self-service role back resumes posts,** clearing `selfServiceLostAt`, also with an audit entry.
   - **Removed after a configurable time.** Once the role has been missing for `selfServiceRemoveAfterDays` days, the entry is deleted. The default is 7; 0 means never. It's per server, set in the dashboard or by command. Removal is checked hourly by the watcher loop and at startup. It's audited as a removal by "system" with the reason, and `triggerUpdate()` drops the Twitch subscription if no other server tracks that streamer.
-  - **The channel follows the role.** When the member's winning role changes, their channel override is recalculated automatically. If an admin has set a channel override for a self-added streamer by hand, it's pinned (`channelOverridePinned`) and no longer follows the role. The dashboard shows "pinned" with a "Go back to role-based" button. Re-running `/settwitchchannel` also clears the pin.
+  - **The channel follows the role.** When the member's winning role changes, their channel override is recalculated automatically. If an admin has set a channel override for a self-added streamer by hand, it's pinned (`channelOverridePinned`) and no longer follows the role. Confirmed by the user. Setting the override to "server default" by hand also pins it, to the default.
+    - **Admins can unpin it.** That clears the pin and **immediately recalculates the channel from the member's current roles** (through `reconcileSelfService`), with an audit entry. Admins can unpin in two ways:
+      - the dashboard's "Go back to role-based" button
+      - a new `role-based: True` option on `/setchanneloverride`, which only works for self-added streamers and can't be combined with `channel`
+    - Re-running `/settwitchchannel` also clears the pin.
   - **Catching up after downtime:** role changes made while the bot was offline are caught by a full check of all self-added streamers at startup, and whenever the self-service role list is edited. Repeated events, and a startup check that finds nothing new, don't add duplicate audit entries.
 - **No proof of Twitch ownership** (user's decision). If it's abused, the server's admins deal with the member directly.
 - **Rate limit:** one `/settwitchchannel` per member per minute, because each call looks up the Twitch account.
@@ -148,6 +152,7 @@ Every file under `data/` must keep loading after a deploy, with nothing lost and
     - `/addselfservicerole role: channel:`
     - `/removeselfservicerole role:`
     - `/setselfserviceexpiry days:`
+    - a `role-based: True` option on `/setchanneloverride` to unpin a self-added streamer
     
     Every other setting can be changed both by command and in the dashboard, so these can too.
   - **Permission check:** add the self-service rules to step 5's check.
@@ -159,7 +164,7 @@ Every file under `data/` must keep loading after a deploy, with nothing lost and
   - `GET …/channels` (text channels only), `GET …/roles` (marking roles the bot can't assign because they're above its own role)
   - `GET …/members?q=`
   - `GET …/streamers` (adds Twitch display name and login, fetched in batches), `POST …/streamers`, `PATCH …/streamers/{twitchId}`, `DELETE …/streamers/{twitchId}`
-  - `GET …/self-service`, `PUT …/self-service` (the whole role → channel list plus `removeAfterDays`; each role and channel is checked to belong to the guild). `PATCH …/streamers/{twitchId}` with `channelOverridePinned: false` sends a self-added streamer back to role-based channel selection.
+  - `GET …/self-service`, `PUT …/self-service` (the whole role → channel list plus `removeAfterDays`; each role and channel is checked to belong to the guild). `PATCH …/streamers/{twitchId}` with `channelOverridePinned: false` unpins a self-added streamer and recalculates their channel from their roles straight away. Any channel change by an admin pins.
   - `GET …/audit?type=&before=`: this server's audit log, paged and newest first. Super-admin-only entries are left out for normal sessions.
   - `GET …/problems`: recorded failures (step 4), the live permission check results (step 5), and the bot-wide Twitch status. `DELETE …/problems/{id}` and `DELETE …/problems` dismiss entries.
   - Super admin only: `GET /dashboard/api/admin/guilds` (all servers with the summary fields above), `enabledTwitchTracking` accepted in `PATCH …/settings`, `POST /dashboard/api/admin/guilds/{guildId}/leave` (`{confirmName, reason, block}`), `GET /dashboard/api/admin/blocked`, `DELETE /dashboard/api/admin/blocked/{guildId}`, and `GET /dashboard/api/admin/audit?guild=&type=&before=` (paged, newest first). All return 403 for normal sessions.
@@ -188,7 +193,7 @@ Every file under `data/` must keep loading after a deploy, with nothing lost and
   - Running the command again replaces the member's own entry.
   - `/removetwitchchannel` removes it.
   - Taking the role away pauses the streamer immediately: go-live posts nothing, and the table shows "Paused". Giving it back resumes them.
-  - Changing which self-service role is the member's highest moves their channel, unless it's pinned.
+  - Changing which self-service role is the member's highest moves their channel, unless it's pinned. An admin setting the channel pins it. Unpinning, from both the dashboard and `/setchanneloverride role-based:True`, recalculates the channel from the member's current roles straight away.
   - With the expiry set to 0 days, check that the hourly/startup cleanup removes the paused entry, and that 0 really means never.
   - Change roles while the bot is stopped, and check that startup catches up.
   - Repeated use within a minute is rate-limited.
