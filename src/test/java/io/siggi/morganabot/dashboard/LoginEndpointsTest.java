@@ -2,7 +2,6 @@ package io.siggi.morganabot.dashboard;
 
 import io.siggi.http.HTTPServer;
 import io.siggi.http.HTTPServerBuilder;
-import io.siggi.http.session.Session;
 import io.siggi.http.session.Sessions;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -26,7 +25,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class LoginEndpointsTest {
     private final AtomicLong now = new AtomicLong(1_000_000L);
     private final LoginTokenStore tokens = new LoginTokenStore(now::get);
-    private final Sessions sessions = Sessions.create(DashboardSession.SESSION_TTL);
+    private final Sessions sessions = DashboardSession.createSessions();
     private ServerSocket socket;
     private HTTPServer server;
     private String base;
@@ -34,8 +33,9 @@ class LoginEndpointsTest {
     @BeforeEach
     void start() throws IOException {
         socket = new ServerSocket(0);
-        server = new HTTPServerBuilder().setSessions(sessions).build();
-        new LoginEndpoints(tokens, now::get).register(server);
+        server = new HTTPServerBuilder().build();
+        TestSessions.register(server, sessions, now::get);
+        new LoginEndpoints(tokens, sessions, now::get).register(server);
         Thread t = new Thread(() -> {
             try {
                 while (true) {
@@ -83,12 +83,12 @@ class LoginEndpointsTest {
     }
 
     /** The session IDs set by a response that are live, logged-in sessions. */
-    private List<String> loggedInSessions(Response response) {
+    private List<String> loggedInSessions(Response response) throws IOException {
         List<String> ids = new ArrayList<>();
         for (String cookie : response.cookies()) {
             if (!cookie.startsWith("SessID=")) continue;
             String id = cookie.substring("SessID=".length(), cookie.indexOf(';'));
-            if (DashboardSession.from(sessions.get(id), now.get()) != null) ids.add(id);
+            if (TestSessions.read(base, id) != null) ids.add(id);
         }
         return ids;
     }
@@ -103,11 +103,14 @@ class LoginEndpointsTest {
         assertEquals("no-store", response.header("Cache-Control"));
         List<String> ids = loggedInSessions(response);
         assertEquals(1, ids.size());
-        DashboardSession login = DashboardSession.from(sessions.get(ids.get(0)), now.get());
+        DashboardSession login = TestSessions.read(base, ids.get(0));
         assertEquals(42L, login.userId());
         assertFalse(login.superAdmin());
         assertEquals(now.get(), login.loginTime());
-        for (String cookie : response.cookies()) assertTrue(cookie.contains("HttpOnly"), cookie);
+        for (String cookie : response.cookies()) {
+            assertTrue(cookie.contains("HttpOnly"), cookie);
+            assertTrue(cookie.contains("SameSite=Lax"), cookie);
+        }
     }
 
     @Test
@@ -115,7 +118,7 @@ class LoginEndpointsTest {
         String token = tokens.issue(new LoginTokenStore.Login(1L, true, 0L), LoginTokenStore.RECOVERY_TTL, null);
         Response response = request("GET", "/dashboard/login?token=" + token, null, null);
         assertEquals("/dashboard/", response.header("Location"));
-        DashboardSession login = DashboardSession.from(sessions.get(loggedInSessions(response).get(0)), now.get());
+        DashboardSession login = TestSessions.read(base, loggedInSessions(response).get(0));
         assertTrue(login.superAdmin());
     }
 
@@ -137,13 +140,12 @@ class LoginEndpointsTest {
 
     @Test
     void loginReplacesAnExistingSession() throws IOException {
-        Session planted = sessions.newSession();
-        planted.set("x", "y");
-        String plantedId = planted.getSessionId();
+        String plantedId = TestSessions.plant(base);
+        assertTrue(TestSessions.exists(base, plantedId));
         String token = tokens.issue(new LoginTokenStore.Login(42L, false, 0L), LoginTokenStore.COMMAND_TTL, null);
         Response response = request("GET", "/dashboard/login?token=" + token, plantedId, null);
         assertEquals(302, response.code());
-        assertNull(sessions.get(plantedId), "the session from before login is gone");
+        assertFalse(TestSessions.exists(base, plantedId), "the session from before login is gone");
         List<String> ids = loggedInSessions(response);
         assertEquals(1, ids.size());
         assertNotEquals(plantedId, ids.get(0));
@@ -160,17 +162,17 @@ class LoginEndpointsTest {
     void logoutNeedsCsrfAndEndsSession() throws IOException {
         String token = tokens.issue(new LoginTokenStore.Login(42L, false, 0L), LoginTokenStore.COMMAND_TTL, null);
         String id = loggedInSessions(request("GET", "/dashboard/login?token=" + token, null, null)).get(0);
-        String csrf = DashboardSession.from(sessions.get(id), now.get()).csrfToken();
+        String csrf = TestSessions.read(base, id).csrfToken();
 
         assertEquals(403, request("POST", "/dashboard/api/logout", id, null).code());
         assertEquals(403, request("POST", "/dashboard/api/logout", id, "wrong").code());
-        assertNotNull(DashboardSession.from(sessions.get(id), now.get()), "still logged in");
+        assertNotNull(TestSessions.read(base, id), "still logged in");
         assertEquals(405, request("GET", "/dashboard/api/logout", id, csrf).code());
 
         Response out = request("POST", "/dashboard/api/logout", id, csrf);
         assertEquals(200, out.code());
         assertEquals("{\"ok\":true}", out.body());
-        assertNull(sessions.get(id));
+        assertFalse(TestSessions.exists(base, id));
         assertTrue(out.cookies().stream().anyMatch(c -> c.startsWith("SessID=;") && c.contains("Max-Age=0")));
     }
 

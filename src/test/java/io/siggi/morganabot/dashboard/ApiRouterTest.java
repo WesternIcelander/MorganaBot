@@ -5,7 +5,6 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import io.siggi.http.HTTPServer;
 import io.siggi.http.HTTPServerBuilder;
-import io.siggi.http.session.Session;
 import io.siggi.http.session.Sessions;
 import io.siggi.morganabot.Access;
 import io.siggi.morganabot.config.ServerInfo;
@@ -52,7 +51,7 @@ class ApiRouterTest {
     Path tempDir;
 
     private final AtomicLong now = new AtomicLong(1_000_000L);
-    private final Sessions sessions = Sessions.create(DashboardSession.SESSION_TTL);
+    private final Sessions sessions = DashboardSession.createSessions();
     private final AtomicBoolean discordUp = new AtomicBoolean(true);
     /** guild → user → member view; users missing from a guild's map aren't in it. */
     private final Map<Long, Map<Long, Access.MemberView>> members = new HashMap<>();
@@ -84,7 +83,7 @@ class ApiRouterTest {
             return new GuildResolver.GuildMember(null, null,
                     view == null ? Access.MemberView.outsider(guildId, userId) : view);
         };
-        ApiRouter api = new ApiRouter(new Access(store, List.of(SUPER)), resolver, now::get);
+        ApiRouter api = new ApiRouter(new Access(store, List.of(SUPER)), sessions, resolver, now::get);
         api.get("/me", Requirement.SESSION, r -> Map.of("userId", r.userId(), "superAdmin", r.isSuperAdmin()));
         api.get("/admin/system", Requirement.SUPER_ADMIN, r -> Map.of("ok", "system"));
         api.get("/guilds/{guildId}/me/streamer", Requirement.GUILD_STREAMER,
@@ -105,8 +104,9 @@ class ApiRouterTest {
             throw ApiError.invalid("channelId", "That channel isn't in this server");
         });
 
-        HTTPServer server = new HTTPServerBuilder().setSessions(sessions).build();
-        new LoginEndpoints(new LoginTokenStore(now::get), now::get).register(server);
+        HTTPServer server = new HTTPServerBuilder().build();
+        TestSessions.register(server, sessions, now::get);
+        new LoginEndpoints(new LoginTokenStore(now::get), sessions, now::get).register(server);
         api.register(server);
         new StaticFiles(getClass().getClassLoader(), "web-test").register(server);
 
@@ -130,13 +130,8 @@ class ApiRouterTest {
         socket.close();
     }
 
-    private record Login(String sessionId, String csrf) {
-    }
-
-    private Login login(long userId, boolean superAdmin) {
-        Session session = sessions.newSession();
-        DashboardSession login = DashboardSession.login(session, userId, superAdmin, now.get());
-        return new Login(session.getSessionId(), login.csrfToken());
+    private TestSessions.Login login(long userId, boolean superAdmin) throws IOException {
+        return TestSessions.login(base, userId, superAdmin);
     }
 
     private record Response(int code, HttpURLConnection connection, String body) {
@@ -153,11 +148,11 @@ class ApiRouterTest {
         }
     }
 
-    private Response request(String method, String path, Login login, String body) throws IOException {
+    private Response request(String method, String path, TestSessions.Login login, String body) throws IOException {
         return request(method, path, login, login == null ? null : login.csrf(), body, "application/json");
     }
 
-    private Response request(String method, String path, Login login, String csrf, String body, String contentType)
+    private Response request(String method, String path, TestSessions.Login login, String csrf, String body, String contentType)
             throws IOException {
         HttpURLConnection c = (HttpURLConnection) new URL(base + path).openConnection();
         c.setInstanceFollowRedirects(false);
@@ -207,7 +202,7 @@ class ApiRouterTest {
 
     @Test
     void expiredSuperAdminSessionIsRejected() throws IOException {
-        Login login = login(SUPER, true);
+        TestSessions.Login login = login(SUPER, true);
         assertEquals(200, request("GET", "/dashboard/api/admin/system", login, null).code());
         now.addAndGet(DashboardSession.SUPER_ADMIN_MAX_AGE);
         assertEquals(401, request("GET", "/dashboard/api/admin/system", login, null).code());
@@ -215,7 +210,7 @@ class ApiRouterTest {
 
     @Test
     void unknownPathsAndMethods() throws IOException {
-        Login login = login(ADMIN, false);
+        TestSessions.Login login = login(ADMIN, false);
         Response missing = request("GET", "/dashboard/api/nope", login, null);
         assertEquals(404, missing.code());
         assertEquals("not_found", missing.error());
@@ -228,7 +223,7 @@ class ApiRouterTest {
 
     @Test
     void writesNeedCsrf() throws IOException {
-        Login login = login(ADMIN, false);
+        TestSessions.Login login = login(ADMIN, false);
         String path = "/dashboard/api/guilds/" + GUILD + "/settings";
         Response none = request("PUT", path, login, null, "{\"value\":\"x\"}", "application/json");
         assertEquals(403, none.code());
@@ -244,7 +239,7 @@ class ApiRouterTest {
 
     @Test
     void writeBodiesMustBeJson() throws IOException {
-        Login login = login(ADMIN, false);
+        TestSessions.Login login = login(ADMIN, false);
         String path = "/dashboard/api/guilds/" + GUILD + "/settings";
         Response form = request("PUT", path, login, login.csrf(), "value=x", "application/x-www-form-urlencoded");
         assertEquals(415, form.code());
@@ -290,7 +285,7 @@ class ApiRouterTest {
 
     @Test
     void accessIsCheckedOnEveryRequest() throws IOException {
-        Login login = login(ROLE_ADMIN, false);
+        TestSessions.Login login = login(ROLE_ADMIN, false);
         String admin = "/dashboard/api/guilds/" + GUILD + "/settings";
         assertEquals(200, request("GET", admin, login, null).code());
         store.modify(GUILD, info -> {
@@ -302,7 +297,7 @@ class ApiRouterTest {
 
     @Test
     void superAdminsReachEveryGuildTheBotIsIn() throws IOException {
-        Login login = login(SUPER, true);
+        TestSessions.Login login = login(SUPER, true);
         Response other = request("GET", "/dashboard/api/guilds/" + OTHER_GUILD + "/settings", login, null);
         assertEquals(200, other.code());
         assertEquals("ADMIN", other.json().get("level").getAsString());
@@ -324,7 +319,7 @@ class ApiRouterTest {
     @Test
     void discordDown() throws IOException {
         discordUp.set(false);
-        Login superAdmin = login(SUPER, true);
+        TestSessions.Login superAdmin = login(SUPER, true);
         assertEquals(200, request("GET", "/dashboard/api/admin/system", superAdmin, null).code());
         assertEquals(200, request("GET", "/dashboard/api/me", superAdmin, null).code());
         Response guild = request("GET", "/dashboard/api/guilds/" + GUILD + "/settings", superAdmin, null);
@@ -336,7 +331,7 @@ class ApiRouterTest {
 
     @Test
     void handlerResults() throws IOException {
-        Login login = login(ADMIN, false);
+        TestSessions.Login login = login(ADMIN, false);
         Response deleted = request("DELETE", "/dashboard/api/guilds/" + GUILD + "/streamers/5", login, null);
         assertEquals(204, deleted.code());
         assertEquals("no-store", deleted.header("Cache-Control"));
@@ -357,7 +352,7 @@ class ApiRouterTest {
 
     @Test
     void logoutStillWorksAndUsesTheSameErrors() throws IOException {
-        Login login = login(ADMIN, false);
+        TestSessions.Login login = login(ADMIN, false);
         Response refused = request("POST", "/dashboard/api/logout", login, null, null, null);
         assertEquals(403, refused.code());
         assertEquals("csrf", refused.error());
@@ -368,7 +363,7 @@ class ApiRouterTest {
 
     @Test
     void routesNeedGuildIdExactlyForGuildRequirements() {
-        ApiRouter router = new ApiRouter(new Access(store, List.of()), (g, u) -> null, now::get);
+        ApiRouter router = new ApiRouter(new Access(store, List.of()), sessions, (g, u) -> null, now::get);
         assertThrows(IllegalArgumentException.class, () -> router.get("/guilds/{guildId}/x", Requirement.SESSION, r -> null));
         assertThrows(IllegalArgumentException.class, () -> router.get("/x", Requirement.GUILD_ADMIN, r -> null));
     }

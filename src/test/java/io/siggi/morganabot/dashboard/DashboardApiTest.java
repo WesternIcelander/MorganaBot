@@ -7,7 +7,6 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import io.siggi.http.HTTPServer;
 import io.siggi.http.HTTPServerBuilder;
-import io.siggi.http.session.Session;
 import io.siggi.http.session.Sessions;
 import io.siggi.morganabot.Access;
 import io.siggi.morganabot.ServerSettings;
@@ -85,7 +84,7 @@ class DashboardApiTest {
     @TempDir
     Path tempDir;
 
-    private final Sessions sessions = Sessions.create(DashboardSession.SESSION_TTL);
+    private final Sessions sessions = DashboardSession.createSessions();
     private final AtomicBoolean twitchRed = new AtomicBoolean(false);
     private final List<Integer> twitchBatches = new ArrayList<>();
     private final Map<String, TwitchUser> twitchUsers = new HashMap<>();
@@ -95,6 +94,7 @@ class DashboardApiTest {
     private FakeGuild guild;
     private FakeGuild otherGuild;
     private ServerSocket socket;
+    private String host;
     private String base;
     private final java.util.concurrent.atomic.AtomicLong clock = new java.util.concurrent.atomic.AtomicLong(1_000_000L);
     private SystemHealth health;
@@ -325,7 +325,7 @@ class DashboardApiTest {
             Access.MemberView view = g.memberView(userId);
             return new GuildResolver.GuildMember(null, null, view == null ? Access.MemberView.outsider(guildId, userId) : view);
         };
-        ApiRouter api = new ApiRouter(access, resolver, System::currentTimeMillis);
+        ApiRouter api = new ApiRouter(access, sessions, resolver, System::currentTimeMillis);
         DashboardApi.TwitchUsers lookup = (Collection<String> ids) -> {
             twitchBatches.add(ids.size());
             Map<String, TwitchUser> result = new HashMap<>();
@@ -361,7 +361,8 @@ class DashboardApiTest {
         });
         new AdminApi(store, settings, problems, provider, () -> health, auditLog).register(api);
 
-        HTTPServer server = new HTTPServerBuilder().setSessions(sessions).build();
+        HTTPServer server = new HTTPServerBuilder().build();
+        TestSessions.register(server, sessions, System::currentTimeMillis);
         api.register(server);
         socket = new ServerSocket(0);
         Thread t = new Thread(() -> {
@@ -375,7 +376,8 @@ class DashboardApiTest {
         });
         t.setDaemon(true);
         t.start();
-        base = "http://127.0.0.1:" + socket.getLocalPort() + ApiRouter.BASE;
+        host = "http://127.0.0.1:" + socket.getLocalPort();
+        base = host + ApiRouter.BASE;
     }
 
     @AfterEach
@@ -385,17 +387,12 @@ class DashboardApiTest {
 
     // --- HTTP helpers ---
 
-    private record Login(String sessionId, String csrf) {
-    }
-
-    private Login login(long userId) {
+    private TestSessions.Login login(long userId) throws IOException {
         return login(userId, false);
     }
 
-    private Login login(long userId, boolean superAdmin) {
-        Session session = sessions.newSession();
-        DashboardSession login = DashboardSession.login(session, userId, superAdmin, System.currentTimeMillis());
-        return new Login(session.getSessionId(), login.csrfToken());
+    private TestSessions.Login login(long userId, boolean superAdmin) throws IOException {
+        return TestSessions.login(host, userId, superAdmin);
     }
 
     private record Response(int code, String body) {
@@ -413,11 +410,11 @@ class DashboardApiTest {
         }
     }
 
-    private Response get(Login login, String path) throws IOException {
+    private Response get(TestSessions.Login login, String path) throws IOException {
         return request("GET", login, path, null);
     }
 
-    private Response request(String method, Login login, String path, String body) throws IOException {
+    private Response request(String method, TestSessions.Login login, String path, String body) throws IOException {
         HttpURLConnection c = (HttpURLConnection) new URL(base + path).openConnection();
         if (method.equals("PATCH")) {
             // HttpURLConnection can't send PATCH; SiggiHTTP doesn't know X-HTTP-Method-Override, so send it raw.
@@ -438,7 +435,7 @@ class DashboardApiTest {
         return new Response(code, in == null ? "" : new String(in.readAllBytes(), StandardCharsets.UTF_8));
     }
 
-    private Response raw(String method, Login login, String path, String body) throws IOException {
+    private Response raw(String method, TestSessions.Login login, String path, String body) throws IOException {
         URL url = new URL(base + path);
         byte[] bytes = body == null ? new byte[0] : body.getBytes(StandardCharsets.UTF_8);
         try (Socket s = new Socket(url.getHost(), url.getPort())) {
@@ -534,7 +531,7 @@ class DashboardApiTest {
 
     @Test
     void ownTemplateFollowsMessageRules() throws IOException {
-        Login streamer = login(STREAMER);
+        TestSessions.Login streamer = login(STREAMER);
         Response refused = request("PUT", streamer, "/guilds/100/me/streamer/template", "{\"template\": \"hi\"}");
         assertEquals(400, refused.code());
         assertEquals("template", refused.field());
@@ -564,7 +561,7 @@ class DashboardApiTest {
 
     @Test
     void ownTwitchSetAndRemove() throws IOException {
-        Login login = login(STREAMER);
+        TestSessions.Login login = login(STREAMER);
         Response set = request("PUT", login, "/guilds/100/me/streamer/twitch", "{\"twitchName\": \"carol\"}");
         assertEquals(200, set.code(), set.body());
         assertEquals("1003", set.json().getAsJsonObject("streamer").get("twitchId").getAsString());
@@ -583,13 +580,13 @@ class DashboardApiTest {
 
     @Test
     void adminRolesOnlyEditableByAdministrators() throws IOException {
-        Login roleAdmin = login(ROLE_ADMIN);
+        TestSessions.Login roleAdmin = login(ROLE_ADMIN);
         JsonObject json = get(roleAdmin, "/guilds/100/admin-roles").json();
         assertFalse(json.get("canEdit").getAsBoolean());
         assertEquals("Mods", json.getAsJsonArray("roles").get(0).getAsJsonObject().get("name").getAsString());
         assertEquals(403, request("PUT", roleAdmin, "/guilds/100/admin-roles", "{\"roles\": [\"10\", \"51\"]}").code());
 
-        Login admin = login(ADMIN);
+        TestSessions.Login admin = login(ADMIN);
         assertTrue(get(admin, "/guilds/100/admin-roles").json().get("canEdit").getAsBoolean());
         Response foreign = request("PUT", admin, "/guilds/100/admin-roles", "{\"roles\": [\"" + OTHER_GUILD_ROLE + "\"]}");
         assertEquals(400, foreign.code());
@@ -610,7 +607,7 @@ class DashboardApiTest {
 
     @Test
     void messageRulesCheckEveryRole() throws IOException {
-        Login admin = login(ADMIN);
+        TestSessions.Login admin = login(ADMIN);
         Response foreign = request("PUT", admin, "/guilds/100/message-rules",
                 "{\"rules\": [{\"roleId\": \"51\", \"allowEveryone\": true, \"allowedMentionRoles\": [\"" + OTHER_GUILD_ROLE + "\"]}]}");
         assertEquals(400, foreign.code());
@@ -630,7 +627,7 @@ class DashboardApiTest {
 
     @Test
     void settingsReadAndPatch() throws IOException {
-        Login admin = login(ADMIN);
+        TestSessions.Login admin = login(ADMIN);
         JsonObject json = get(admin, "/guilds/100/settings").json();
         assertFalse(json.has("enabledTwitchTracking"), "normal sessions never see the Twitch switch");
         assertTrue(json.get("twitchDisabledMessage").isJsonNull());
@@ -657,7 +654,7 @@ class DashboardApiTest {
 
     @Test
     void settingsRejectForeignAndWrongChannelsWithoutChangingAnything() throws IOException {
-        Login admin = login(ADMIN);
+        TestSessions.Login admin = login(ADMIN);
         Response foreign = request("PATCH", admin, "/guilds/100/settings",
                 "{\"deleteOnOffline\": true, \"liveChannelId\": \"" + OTHER_GUILD_CHANNEL + "\"}");
         assertEquals(400, foreign.code());
@@ -682,7 +679,7 @@ class DashboardApiTest {
 
     @Test
     void autoPublishChannelsReadAndPatch() throws IOException {
-        Login admin = login(ADMIN);
+        TestSessions.Login admin = login(ADMIN);
         assertEquals(0, get(admin, "/guilds/100/settings").json().getAsJsonArray("autoPublishChannels").size(),
                 "no live alerts go to an announcement channel yet");
         store.modify(GUILD, info -> {
@@ -718,7 +715,7 @@ class DashboardApiTest {
 
     @Test
     void autoPublishRejectsChannelsThatArentAnnouncementChannels() throws IOException {
-        Login admin = login(ADMIN);
+        TestSessions.Login admin = login(ADMIN);
         for (String body : new String[]{
                 "{\"autoPublishChannels\": {\"800\": false}}",
                 "{\"autoPublishChannels\": {\"902\": false}}",
@@ -742,7 +739,7 @@ class DashboardApiTest {
             info.enabledTwitchTracking = false;
             return null;
         });
-        Login admin = login(ADMIN);
+        TestSessions.Login admin = login(ADMIN);
         assertFalse(get(admin, "/guilds/100/settings").json().get("twitchDisabledMessage").isJsonNull());
         Response r = request("PATCH", admin, "/guilds/100/settings", "{\"deleteOnOffline\": true}");
         assertEquals(409, r.code());
@@ -755,7 +752,7 @@ class DashboardApiTest {
 
     @Test
     void channelsRolesAndMembers() throws IOException {
-        Login admin = login(ADMIN);
+        TestSessions.Login admin = login(ADMIN);
         JsonArray channels = get(admin, "/guilds/100/channels").json().getAsJsonArray("channels");
         assertEquals(3, channels.size());
         assertEquals("announcement", channels.get(2).getAsJsonObject().get("type").getAsString());
@@ -795,7 +792,7 @@ class DashboardApiTest {
 
     @Test
     void addEditAndDeleteStreamers() throws IOException {
-        Login admin = login(ADMIN);
+        TestSessions.Login admin = login(ADMIN);
         assertEquals("channelId", request("POST", admin, "/guilds/100/streamers",
                 "{\"twitchName\": \"carol\", \"channelId\": \"" + OTHER_GUILD_CHANNEL + "\"}").field());
         assertEquals("discordUserId", request("POST", admin, "/guilds/100/streamers",
@@ -831,7 +828,7 @@ class DashboardApiTest {
 
     @Test
     void adminChannelChangePinsAndUnpinRecalculates() throws IOException {
-        Login admin = login(ADMIN);
+        TestSessions.Login admin = login(ADMIN);
         Response pinned = request("PATCH", admin, "/guilds/100/streamers/1001", "{\"channelId\": \"800\"}");
         assertEquals(200, pinned.code(), pinned.body());
         assertTrue(streamer("1001").channelOverridePinned);
@@ -857,7 +854,7 @@ class DashboardApiTest {
 
     @Test
     void selfServiceSortedByRoleOrderAndValidated() throws IOException {
-        Login admin = login(ADMIN);
+        TestSessions.Login admin = login(ADMIN);
         JsonObject json = get(admin, "/guilds/100/self-service").json();
         JsonArray roles = json.getAsJsonArray("roles");
         // Stored as VIP, STAFF; Discord's order puts STAFF first.
@@ -899,7 +896,7 @@ class DashboardApiTest {
         hidden.visibility = AuditEntry.VISIBILITY_SUPER_ADMIN;
         auditLog.record(GUILD, Actor.superAdmin(SUPER, "boss"), hidden);
 
-        Login admin = login(ADMIN);
+        TestSessions.Login admin = login(ADMIN);
         JsonObject page1 = get(admin, "/guilds/100/audit?limit=2").json();
         JsonArray entries = page1.getAsJsonArray("entries");
         assertEquals(2, entries.size());
@@ -934,7 +931,7 @@ class DashboardApiTest {
 
     @Test
     void diagnoseRunsNowForOneOrAllStreamers() throws IOException {
-        Login admin = login(ADMIN);
+        TestSessions.Login admin = login(ADMIN);
         Response all = request("POST", admin, "/guilds/100/diagnose", null);
         assertEquals(200, all.code(), all.body());
         assertEquals("ERROR", all.json().getAsJsonArray("server").get(0).getAsJsonObject().get("level").getAsString());
@@ -947,7 +944,7 @@ class DashboardApiTest {
     void problemsListDiagnoseAndTwitchFlag() throws IOException {
         Problem a = problems.record(GUILD, new Problem(Problem.SEND_LIVE_MESSAGE, Problem.Target.channel(LIVE, "live"), null, "Missing permission"));
         problems.record(GUILD, new Problem(Problem.ADD_LIVE_ROLE, Problem.Target.role(VIP, "VIP"), null, "Above the bot"));
-        Login admin = login(ADMIN);
+        TestSessions.Login admin = login(ADMIN);
         JsonObject json = get(admin, "/guilds/100/problems").json();
         assertEquals(2, json.getAsJsonArray("problems").size());
         assertEquals(1, json.getAsJsonObject("diagnose").getAsJsonArray("server").size());
@@ -973,7 +970,7 @@ class DashboardApiTest {
         health.log(Component.BOT, Severity.ERROR, "boom", null);
         String id = health.getLog().list().get(0).id;
         for (long user : new long[]{ADMIN, ROLE_ADMIN, STREAMER, NOBODY}) {
-            Login login = login(user);
+            TestSessions.Login login = login(user);
             assertEquals(403, get(login, "/admin/guilds").code());
             assertEquals(403, get(login, "/admin/system").code());
             assertEquals(403, get(login, "/admin/system/log").code());
@@ -1010,7 +1007,7 @@ class DashboardApiTest {
 
     @Test
     void superAdminTurnsTwitchOnAndOff() throws IOException {
-        Login sa = login(SUPER, true);
+        TestSessions.Login sa = login(SUPER, true);
         Response off = request("PATCH", sa, "/guilds/100/settings", "{\"enabledTwitchTracking\": false, \"deleteOnOffline\": true}");
         assertEquals(200, off.code(), off.body());
         assertFalse(off.json().get("enabledTwitchTracking").getAsBoolean());
@@ -1043,7 +1040,7 @@ class DashboardApiTest {
 
     @Test
     void superAdminRemovesAndBlocksAServer() throws IOException {
-        Login sa = login(SUPER, true);
+        TestSessions.Login sa = login(SUPER, true);
         // The name must be typed exactly.
         Response missing = request("POST", sa, "/admin/guilds/100/leave", "{}");
         assertEquals(400, missing.code());
@@ -1105,7 +1102,7 @@ class DashboardApiTest {
 
     @Test
     void superAdminAuditMergesEveryServer() throws IOException {
-        Login sa = login(SUPER, true);
+        TestSessions.Login sa = login(SUPER, true);
         // The server's own Audit tab hides super-admin-only entries from normal admins, but super admins see them.
         AuditEntry startup = new AuditEntry(AuditEntry.BLOCKED_STARTUP_LEAVE).superAdminOnly();
         startup.subject = AuditEntry.Value.server(GUILD, "Main");
@@ -1170,7 +1167,7 @@ class DashboardApiTest {
 
     @Test
     void systemStatusCardsAndGeneralInfo() throws IOException {
-        Login sa = login(SUPER, true);
+        TestSessions.Login sa = login(SUPER, true);
         JsonObject json = get(sa, "/admin/system").json();
         assertFalse(json.get("anyRed").getAsBoolean());
         JsonArray cards = json.getAsJsonArray("components");
@@ -1206,7 +1203,7 @@ class DashboardApiTest {
 
     @Test
     void systemLogFiltersPagesAndDismisses() throws IOException {
-        Login sa = login(SUPER, true);
+        TestSessions.Login sa = login(SUPER, true);
         for (int i = 0; i < 5; i++) {
             clock.addAndGet(1000L);
             health.log(i % 2 == 0 ? Component.TWITCH_API : Component.DISCORD, i < 3 ? Severity.ERROR : Severity.WARNING, "message " + i,

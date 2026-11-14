@@ -1,20 +1,29 @@
 package io.siggi.morganabot.dashboard;
 
-import io.siggi.http.session.Session;
-import io.siggi.http.session.Sessions;
+import io.siggi.http.session.SessionHandle;
 import org.junit.jupiter.api.Test;
+
+import java.util.HashMap;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+/** The stored login values; sessions themselves are covered over HTTP in LoginEndpointsTest. */
 class DashboardSessionTest {
-    private final Sessions sessions = Sessions.create(DashboardSession.SESSION_TTL);
+    private static DashboardSession login(Map<String, String> values, long userId, boolean superAdmin, long now) {
+        return DashboardSession.login(values::put, userId, superAdmin, now);
+    }
+
+    private static DashboardSession read(Map<String, String> values, long now) {
+        return DashboardSession.from(values::get, now);
+    }
 
     @Test
     void roundTrip() {
-        Session session = sessions.newSession();
-        DashboardSession login = DashboardSession.login(session, 1234567890123456789L, false, 5000L);
+        Map<String, String> values = new HashMap<>();
+        DashboardSession login = login(values, 1234567890123456789L, false, 5000L);
         assertTrue(login.csrfToken().length() >= 40);
-        DashboardSession read = DashboardSession.from(sessions.get(session.getSessionId()), 6000L);
+        DashboardSession read = read(values, 6000L);
         assertEquals(login, read);
         assertTrue(read.csrfMatches(login.csrfToken()));
         assertFalse(read.csrfMatches("wrong"));
@@ -24,33 +33,33 @@ class DashboardSessionTest {
 
     @Test
     void newCsrfTokenEachLogin() {
-        DashboardSession a = DashboardSession.login(sessions.newSession(), 1L, false, 0L);
-        DashboardSession b = DashboardSession.login(sessions.newSession(), 1L, false, 0L);
+        DashboardSession a = login(new HashMap<>(), 1L, false, 0L);
+        DashboardSession b = login(new HashMap<>(), 1L, false, 0L);
         assertNotEquals(a.csrfToken(), b.csrfToken());
     }
 
     @Test
     void notLoggedIn() {
-        assertNull(DashboardSession.from(null, 0L));
-        assertNull(DashboardSession.from(sessions.newSession(), 0L));
-        Session deleted = sessions.newSession();
-        DashboardSession.login(deleted, 1L, false, 0L);
-        deleted.delete();
-        assertNull(DashboardSession.from(deleted, 0L));
+        assertNull(DashboardSession.from((SessionHandle) null, 0L));
+        assertNull(read(new HashMap<>(), 0L));
+        Map<String, String> broken = new HashMap<>();
+        login(broken, 1L, false, 0L);
+        broken.put(DashboardSession.KEY_USER, "not a number");
+        assertNull(read(broken, 0L));
     }
 
     @Test
     void superAdminSessionsEndAfterEightHours() {
-        Session session = sessions.newSession();
-        DashboardSession.login(session, 1L, true, 0L);
-        assertNotNull(DashboardSession.from(session, DashboardSession.SUPER_ADMIN_MAX_AGE - 1L));
-        assertNull(DashboardSession.from(session, DashboardSession.SUPER_ADMIN_MAX_AGE));
+        Map<String, String> values = new HashMap<>();
+        login(values, 1L, true, 0L);
+        assertNotNull(read(values, DashboardSession.SUPER_ADMIN_MAX_AGE - 1L));
+        assertNull(read(values, DashboardSession.SUPER_ADMIN_MAX_AGE));
     }
 
     @Test
     void normalSessionsDontHaveTheEightHourLimit() {
-        Session session = sessions.newSession();
-        DashboardSession.login(session, 1L, false, 0L);
-        assertNotNull(DashboardSession.from(session, DashboardSession.SUPER_ADMIN_MAX_AGE * 2));
+        Map<String, String> values = new HashMap<>();
+        login(values, 1L, false, 0L);
+        assertNotNull(read(values, DashboardSession.SUPER_ADMIN_MAX_AGE * 2));
     }
 }

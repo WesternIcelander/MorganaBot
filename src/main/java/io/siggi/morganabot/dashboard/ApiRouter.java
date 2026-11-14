@@ -2,6 +2,7 @@ package io.siggi.morganabot.dashboard;
 
 import io.siggi.http.HTTPRequest;
 import io.siggi.http.HTTPServer;
+import io.siggi.http.session.Sessions;
 import io.siggi.morganabot.Access;
 import io.siggi.morganabot.health.Health;
 
@@ -76,12 +77,14 @@ public final class ApiRouter {
     }
 
     private final Access access;
+    private final Sessions sessions;
     private final GuildResolver guilds;
     private final LongSupplier clock;
     private final List<Route> routes = new ArrayList<>();
 
-    public ApiRouter(Access access, GuildResolver guilds, LongSupplier clock) {
+    public ApiRouter(Access access, Sessions sessions, GuildResolver guilds, LongSupplier clock) {
         this.access = access;
+        this.sessions = sessions;
         this.guilds = guilds;
         this.clock = clock;
     }
@@ -224,7 +227,7 @@ public final class ApiRouter {
             throw ApiError.notFound("No such API endpoint");
         }
 
-        DashboardSession session = DashboardSession.from(request.getSessionIfExists(), clock.getAsLong());
+        DashboardSession session = DashboardSession.from(sessions.readSession(request), clock.getAsLong());
         if (session == null) throw ApiError.notLoggedIn();
         if (isWrite(method)) {
             if (!session.csrfMatches(request.getHeader(DashboardSession.CSRF_HEADER))) throw ApiError.csrf();

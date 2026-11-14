@@ -57,12 +57,13 @@ public class WebHandler {
         if (started) return;
         started = true;
         serverSocket = new ServerSocket(configuration.apiPort);
+        httpServer = new HTTPServerBuilder().build();
         // Dashboard sessions: in memory (a restart logs everyone out), 24 hours since last use.
-        httpServer = new HTTPServerBuilder().setSessions(Sessions.create(DashboardSession.SESSION_TTL)).build();
+        Sessions sessions = DashboardSession.createSessions();
         // SiggiHTTP picks the first matching registration, so the most specific paths go first:
         // login and logout, then the API router (/dashboard/api/…), then static files (/dashboard/…).
-        new LoginEndpoints(bot.getLoginTokens()).register(httpServer);
-        api = new ApiRouter(bot.getAccess(), GuildResolver.jda(bot::getJDA), System::currentTimeMillis);
+        new LoginEndpoints(bot.getLoginTokens(), sessions).register(httpServer);
+        api = new ApiRouter(bot.getAccess(), sessions, GuildResolver.jda(bot::getJDA), System::currentTimeMillis);
         GuildData.Provider guilds = JdaGuildData.provider(bot::getJDA, bot::getDiagnose);
         new DashboardApi(bot.getServerInfoStore(), bot.getServerSettings(), bot.getAccess(), bot.getAuditLog(),
                 bot.getServerProblems(), guilds, this::twitchUsers, this::twitchTrouble).register(api);

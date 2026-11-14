@@ -2,7 +2,8 @@ package io.siggi.morganabot.dashboard;
 
 import io.siggi.http.HTTPRequest;
 import io.siggi.http.HTTPServer;
-import io.siggi.http.session.Session;
+import io.siggi.http.session.SessionHandle;
+import io.siggi.http.session.Sessions;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -11,7 +12,7 @@ import java.util.function.LongSupplier;
 /**
  * {@code GET /dashboard/login?token=} and {@code POST /dashboard/api/logout}.
  * <p>
- * Login uses up the token, replaces the session ({@code resetSession()}, so a session ID planted before login is
+ * Login uses up the token, replaces the session ({@code Sessions.resetSession}, so a session ID planted before login is
  * useless), stores the login and redirects straight away, so the token doesn't stay in the address bar.
  * {@code Referrer-Policy: no-referrer} keeps it from being sent anywhere.
  */
@@ -20,14 +21,16 @@ public class LoginEndpoints {
     public static final String LOGOUT_PATH = "/dashboard/api/logout";
 
     private final LoginTokenStore tokens;
+    private final Sessions sessions;
     private final LongSupplier clock;
 
-    public LoginEndpoints(LoginTokenStore tokens) {
-        this(tokens, System::currentTimeMillis);
+    public LoginEndpoints(LoginTokenStore tokens, Sessions sessions) {
+        this(tokens, sessions, System::currentTimeMillis);
     }
 
-    public LoginEndpoints(LoginTokenStore tokens, LongSupplier clock) {
+    public LoginEndpoints(LoginTokenStore tokens, Sessions sessions, LongSupplier clock) {
         this.tokens = tokens;
+        this.sessions = sessions;
         this.clock = clock;
     }
 
@@ -52,23 +55,22 @@ public class LoginEndpoints {
                     "This login link has expired or was already used. Run /dashboard again to get a new one.");
             return;
         }
-        Session session = request.resetSession();
-        DashboardSession.login(session, login.userId(), login.superAdmin(), clock.getAsLong());
+        try (SessionHandle session = sessions.resetSession(request)) {
+            DashboardSession.login(session, login.userId(), login.superAdmin(), clock.getAsLong());
+        }
         request.response.redirect(landingPage(login.guildId()));
     }
 
     void logout(HTTPRequest request) throws Exception {
         request.allowedMethods("POST");
         WebResponses.apiHeaders(request.response);
-        Session session = request.getSessionIfExists();
-        DashboardSession login = DashboardSession.from(session, clock.getAsLong());
+        DashboardSession login = DashboardSession.from(sessions.readSession(request), clock.getAsLong());
         if (login != null && !login.csrfMatches(request.getHeader(DashboardSession.CSRF_HEADER))) {
             WebResponses.sendError(request, ApiError.csrf());
             return;
         }
-        if (session != null) session.delete();
-        request.response.addHeader("Set-Cookie", request.server.getSessionCookieName()
-                + "=; path=/; Max-Age=0; HttpOnly;" + (request.isSecure() ? " Secure;" : ""));
+        // Ends the session and clears the cookie.
+        sessions.deleteSession(request);
         WebResponses.sendOk(request);
     }
 
